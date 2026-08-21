@@ -1,0 +1,16 @@
+# 1 行 1 被写体。空行と # 始まりは無視される。
+# ここに書くのは「被写体」だけでよい。トリガーワードとスタイル語は
+# configs/icon_lora.toml の prompt_template が自動で付ける。
+#   -> "an icon in ICONST style, a coffee cup, flat, minimal"
+a coffee cup
+a house key
+a calendar
+a paper airplane
+a light bulb
+a shopping bag
+a camera
+an umbrella
+a rocket
+an envelope
+a shopping cart
+a magnifying glass

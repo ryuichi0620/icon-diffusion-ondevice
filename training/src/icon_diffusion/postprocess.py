@@ -1,0 +1,117 @@
+"""生成した画像をアイコンとして使える形に整える。
+
+拡散モデルは必ず「塗りつぶした背景」を描く。アイコンとして使うなら背景は透過であってほしい。
+フラット塗りのアイコンに限れば、背景色は外周から連続した一様な領域なので確実に抜ける。
+"""
+
+from __future__ import annotations
+
+from collections import deque
+
+import numpy as np
+from PIL import Image
+
+
+def estimate_background(array: np.ndarray) -> np.ndarray:
+    """外周 2 ピクセルの中央値を背景色とみなす。平均だと角のノイズに引っ張られる。"""
+    border = np.concatenate(
+        [
+            array[:2, :, :].reshape(-1, 3),
+            array[-2:, :, :].reshape(-1, 3),
+            array[:, :2, :].reshape(-1, 3),
+            array[:, -2:, :].reshape(-1, 3),
+        ]
+    )
+    return np.median(border, axis=0)
+
+
+def remove_flat_background(
+    image: Image.Image,
+    *,
+    tolerance: float = 0.06,
+    feather: float = 0.12,
+) -> Image.Image:
+    """一様な背景を透過にする。
+
+    「背景色に近い」だけで消すと、アイコンの内側にある背景と同じ色の領域（白抜きなど）まで
+    消えてしまう。そこで**外周から連続してつながっている領域だけ**を背景と判定する。
+
+    - `tolerance` … これ以下の色差は完全な背景（alpha 0）
+    - `feather`   … tolerance からこの値までは半透明。輪郭のアンチエイリアスを拾う
+
+    輪郭画素は `mix(背景色, 前景色, alpha)` になっているので、alpha で割り戻して
+    前景色を復元する。これをしないと縁に背景色のふちが残る。
+    """
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    height, width, _ = rgb.shape
+    background = estimate_background(rgb)
+
+    # 背景色からの距離（0〜1 程度に収まるよう √3 で正規化）
+    distance = np.linalg.norm(rgb - background, axis=2) / np.sqrt(3.0)
+
+    # 「背景かもしれない」画素。ここから外周続きの成分だけを拾う
+    candidate = distance <= (tolerance + feather)
+
+    reachable = _flood_from_border(candidate)
+
+    # 背景領域内では距離に応じて alpha を立ち上げ、それ以外は不透明
+    ramp = np.clip((distance - tolerance) / max(feather, 1e-6), 0.0, 1.0)
+    alpha = np.where(reachable, ramp, 1.0).astype(np.float32)
+
+    # 縁の色を復元する: px = (1-a) * bg + a * fg  ->  fg = (px - (1-a) * bg) / a
+    safe_alpha = np.maximum(alpha, 1e-3)[:, :, None]
+    foreground = (rgb - (1.0 - alpha)[:, :, None] * background) / safe_alpha
+    foreground = np.clip(foreground, 0.0, 1.0)
+    # 完全透過の画素は色を持たないので、にじみ防止に背景色を入れておく
+    foreground = np.where((alpha > 1e-3)[:, :, None], foreground, background)
+
+    rgba = np.dstack(
+        [
+            (foreground * 255.0).round().astype(np.uint8),
+            (alpha * 255.0).round().astype(np.uint8),
+        ]
+    )
+    return Image.fromarray(rgba, mode="RGBA")
+
+
+def _flood_from_border(candidate: np.ndarray) -> np.ndarray:
+    """外周の候補画素から 4 近傍で連結成分を広げる。
+
+    これがあるおかげで、アイコンの内側にある「背景と同じ色の抜き」は残る。
+    """
+    height, width = candidate.shape
+    reachable = np.zeros_like(candidate, dtype=bool)
+    queue: deque[tuple[int, int]] = deque()
+
+    def seed(y: int, x: int) -> None:
+        if candidate[y, x] and not reachable[y, x]:
+            reachable[y, x] = True
+            queue.append((y, x))
+
+    for x in range(width):
+        seed(0, x)
+        seed(height - 1, x)
+    for y in range(height):
+        seed(y, 0)
+        seed(y, width - 1)
+
+    while queue:
+        y, x = queue.popleft()
+        if y > 0:
+            seed(y - 1, x)
+        if y + 1 < height:
+            seed(y + 1, x)
+        if x > 0:
+            seed(y, x - 1)
+        if x + 1 < width:
+            seed(y, x + 1)
+
+    return reachable
+
+
+def transparency_ratio(image: Image.Image) -> float:
+    """完全透過の画素の割合。透過処理が効いたかの目安。"""
+    if image.mode != "RGBA":
+        return 0.0
+    alpha = np.asarray(image.split()[-1], dtype=np.uint8)
+    return float((alpha == 0).mean())

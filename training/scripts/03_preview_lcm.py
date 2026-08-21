@@ -22,15 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from icon_diffusion import load_config  # noqa: E402
-from icon_diffusion.pipeline import (  # noqa: E402
-    attach_loras,
-    load_base_pipeline,
-    make_contact_sheet,
-    make_generator,
-    select_device,
-    select_dtype,
-)
+from icon_diffusion import load_config, load_torch_stack  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,8 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         print("[stage3] 被写体が空です。--subjects か設定の preview.subjects を埋めてください", file=sys.stderr)
         return 1
 
-    device = select_device(args.device)
-    dtype = select_dtype(device)
+    # 重い依存はここまで遅らせる（--help と引数チェックは torch 無しで通る）
+    _, pipeline_module = load_torch_stack()
+
+    device = pipeline_module.select_device(args.device)
+    dtype = pipeline_module.select_dtype(device)
     print(f"[stage3] device={device} dtype={dtype}")
     print(f"[stage3] steps={steps} guidance={guidance} style_weight={style_weight} seed={seed}")
     if guidance > 1.0:
@@ -77,9 +72,9 @@ def main(argv: list[str] | None = None) -> int:
             " 端末側は 1.0 を既定にする想定です（docs/architecture.md）"
         )
 
-    pipe = load_base_pipeline(cfg, device, dtype)
+    pipe = pipeline_module.load_base_pipeline(cfg, device, dtype)
 
-    adapters = attach_loras(
+    adapters = pipeline_module.attach_loras(
         pipe,
         cfg,
         style_lora_dir=args.lora_dir,
@@ -115,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             negative_prompt=cfg.style.negative_prompt or None,
             num_inference_steps=steps,
             guidance_scale=guidance,
-            generator=make_generator(seed),
+            generator=pipeline_module.make_generator(seed),
         ).images[0]
         elapsed = time.perf_counter() - started
 
@@ -128,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"[stage3] {name}  {elapsed:.1f}s")
 
-    sheet = make_contact_sheet(images, labels, columns=3)
+    sheet = pipeline_module.make_contact_sheet(images, labels, columns=3)
     sheet_path = output_dir / "contact_sheet.png"
     sheet.save(sheet_path)
 

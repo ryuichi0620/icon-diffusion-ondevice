@@ -17,6 +17,9 @@
 TODO(core-ai): coreai_torch / coreai_opt の API 名は企画メモの記述をそのまま写している。
 WWDC26 セッション 324 / 325 と apple/coreai-torch の実物に対して要検証。
 変換部分は export_module() に閉じてあるので、ずれてもそこだけ直せばよい。
+
+なお **iOS に載せるのは後回しでよい**。モデルを完成させるだけなら Stage 1〜3（＋generate.py）
+で完結する。このスクリプトが要るのは端末で動かす段になってから。
 """
 
 from __future__ import annotations
@@ -28,65 +31,21 @@ import sys
 import tempfile
 from pathlib import Path
 
-import torch
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from icon_diffusion import load_config  # noqa: E402
-from icon_diffusion.pipeline import load_base_pipeline  # noqa: E402
+from icon_diffusion import load_config, load_torch_stack  # noqa: E402
 
 # LCM の 4 ステップは既知の固定値。Swift 側のテストと突き合わせるために書き出す
 LCM_4STEP_TIMESTEPS = [999, 759, 519, 279]
 
 
-class TextEncoderWrapper(torch.nn.Module):
-    """input_ids -> last_hidden_state。int32 で受けて内部で long に上げる。"""
-
-    def __init__(self, text_encoder: torch.nn.Module) -> None:
-        super().__init__()
-        self.text_encoder = text_encoder
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return self.text_encoder(input_ids=input_ids.to(torch.long))[0]
-
-
-class UNetWrapper(torch.nn.Module):
-    """毎ステップ回る本体。ここだけが実行回数 × なので最適化の対象。"""
-
-    def __init__(self, unet: torch.nn.Module) -> None:
-        super().__init__()
-        self.unet = unet
-
-    def forward(
-        self,
-        sample: torch.Tensor,
-        timestep: torch.Tensor,
-        encoder_hidden_states: torch.Tensor,
-    ) -> torch.Tensor:
-        return self.unet(sample, timestep, encoder_hidden_states=encoder_hidden_states).sample
-
-
-class VAEDecoderWrapper(torch.nn.Module):
-    """スケジューラが吐いた潜在をそのまま受け取り、画像にする。
-
-    scaling_factor の割り戻しは**モデルの中で**やる。Swift 側で掛け忘れる事故を防ぐため。
-    pipeline_config.json の vae_scaling_applied_in_model が true なのはこの理由。
-    """
-
-    def __init__(self, vae: torch.nn.Module) -> None:
-        super().__init__()
-        self.vae = vae
-        self.scaling_factor = float(vae.config.scaling_factor)
-
-    def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        return self.vae.decode(latent / self.scaling_factor).sample
-
-
-def export_module(module: torch.nn.Module, sample: tuple, out_path: Path, quantize: str) -> None:
+def export_module(module, sample: tuple, out_path: Path, quantize: str) -> None:
     """PyTorch モジュールを 1 つ Core AI 形式に変換して保存する。
 
     TODO(core-ai): ここが企画メモの記述をそのまま写した部分。API がずれたらこの関数だけ直す。
     """
+    import torch
+
     try:
         from coreai_torch import TorchConverter, get_decomp_table  # type: ignore
     except ImportError as exc:  # pragma: no cover - 環境依存
@@ -114,7 +73,7 @@ def _apply_quantization(program, quantize: str) -> None:
 
     企画メモには「`coreai_opt.quantization` の Quantizer で INT8 量子化などをかける」とだけあり、
     具体的な呼び出し方は未確認。推測で書くと黙って壊れるので、現状は警告して素通しする。
-    fp32 のままでも 3 モデル揃えば Stage 6 の疎通確認はできる（メモリは docs/architecture.md 参照）。
+    fp32 のままでも 3 モデル揃えば疎通確認はできる（メモリは docs/architecture.md 参照）。
     """
     print(
         f"[stage5] ⚠ 量子化 ({quantize}) は未実装のためスキップします。\n"
@@ -123,7 +82,9 @@ def _apply_quantization(program, quantize: str) -> None:
     )
 
 
-def build_examples(cfg, pipe, batch: int) -> dict[str, tuple]:
+def build_examples(pipe, batch: int) -> dict[str, tuple]:
+    import torch
+
     unet_config = pipe.unet.config
     latent_channels = int(getattr(unet_config, "in_channels", 4))
     latent_size = int(getattr(unet_config, "sample_size", 64))
@@ -141,20 +102,76 @@ def build_examples(cfg, pipe, batch: int) -> dict[str, tuple]:
     }
 
 
-def write_swift_resources(cfg, pipe, resources_dir: Path) -> dict:
+def export_tokenizer_files(tokenizer, resources_dir: Path, *, model_path: Path) -> str:
+    """Swift の CLIPTokenizer が読む vocab.json / merges.txt を取り出す。
+
+    transformers のバージョンによって出どころが違う:
+      - 5.x の CLIPTokenizer は fast 実装で、save_pretrained は tokenizer.json しか書かない
+      - backend の BPE モデルを直接 save すると vocab.json / merges.txt が出る
+      - 旧来の slow 実装なら save_pretrained がそのまま両方書く
+    どれで取れたかを返す。取れなければ SystemExit。
+    """
+    wanted = ("vocab.json", "merges.txt")
+
+    def take(directory: Path) -> bool:
+        if not all((directory / name).is_file() for name in wanted):
+            return False
+        for name in wanted:
+            shutil.copy2(directory / name, resources_dir / name)
+        return True
+
+    # 1) fast トークナイザの backend から直接取り出す（transformers 5.x の既定経路）
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is not None:
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                backend.model.save(tmp)
+            except Exception:  # noqa: BLE001 - 経路が使えないだけなので次を試す
+                pass
+            else:
+                if take(Path(tmp)):
+                    return "backend_tokenizer.model.save"
+
+    # 2) slow トークナイザなら save_pretrained がそのまま書く
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            tokenizer.save_pretrained(tmp)
+        except Exception:  # noqa: BLE001
+            pass
+        else:
+            if take(Path(tmp)):
+                return "tokenizer.save_pretrained"
+
+    # 3) 変換元のディレクトリに元ファイルが残っていることもある
+    if take(model_path / "tokenizer"):
+        return f"{model_path.name}/tokenizer"
+
+    raise SystemExit(
+        "トークナイザから vocab.json / merges.txt を取り出せませんでした。\n"
+        "Swift 側の CLIPTokenizer はこの 2 ファイルを読むので、手動で用意して\n"
+        f"  {resources_dir}\n"
+        "に置いてください。ベースモデルの tokenizer/ ディレクトリにあります。"
+    )
+
+
+def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> dict:
     """Swift 側が読むトークナイザ資産と pipeline_config.json を書き出す。"""
+    import torch
+
     resources_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        pipe.tokenizer.save_pretrained(tmp)
-        for name in ("vocab.json", "merges.txt"):
-            src = Path(tmp) / name
-            if not src.is_file():
-                raise SystemExit(f"トークナイザから {name} を取り出せませんでした: {src}")
-            shutil.copy2(src, resources_dir / name)
+    route = export_tokenizer_files(pipe.tokenizer, resources_dir, model_path=model_path)
+    print(f"[stage5] トークナイザ資産の取得元: {route}")
 
     scheduler_config = pipe.scheduler.config
     unet_config = pipe.unet.config
+
+    # 潜在から画像への拡大率は VAE のブロック数で決まる。SD1.5 は 8 だが決め打ちにしない
+    # （ブロック構成が違うモデルに差し替えたとき、config だけ静かにズレるのを防ぐ）
+    vae_scale_factor = int(
+        getattr(pipe, "vae_scale_factor", 2 ** (len(pipe.vae.config.block_out_channels) - 1))
+    )
+    latent_size = int(getattr(unet_config, "sample_size", 64))
 
     num_train_timesteps = int(getattr(scheduler_config, "num_train_timesteps", 1000))
     beta_start = float(getattr(scheduler_config, "beta_start", 0.00085))
@@ -180,8 +197,9 @@ def write_swift_resources(cfg, pipe, resources_dir: Path) -> dict:
         "vae_scaling_factor": float(pipe.vae.config.scaling_factor),
         "vae_scaling_applied_in_model": True,
         "latent_channels": int(getattr(unet_config, "in_channels", 4)),
-        "latent_size": int(getattr(unet_config, "sample_size", 64)),
-        "image_size": int(getattr(unet_config, "sample_size", 64)) * 8,
+        "latent_size": latent_size,
+        "vae_scale_factor": vae_scale_factor,
+        "image_size": latent_size * vae_scale_factor,
         "text_embed_dim": int(pipe.text_encoder.config.hidden_size),
         "max_sequence_length": int(getattr(pipe.tokenizer, "model_max_length", 77)),
         "bos_token_id": int(pipe.tokenizer.bos_token_id),
@@ -226,23 +244,35 @@ def main(argv: list[str] | None = None) -> int:
         print("[stage5] 先に Stage 4 を実行してください: python scripts/04_fuse_lora.py", file=sys.stderr)
         return 1
 
+    # 重い依存はここまで遅らせる（--help と引数チェックは torch 無しで通る）
+    torch, pipeline_module = load_torch_stack()
+    from icon_diffusion.export_wrappers import (  # noqa: PLC0415
+        TextEncoderWrapper,
+        UNetWrapper,
+        VAEDecoderWrapper,
+    )
+
     # 変換は CPU / fp32 で行う。fp16 のまま export すると精度が落ちる。
     print(f"[stage5] 変換元: {model_path}")
-    pipe = load_base_pipeline(cfg, torch.device("cpu"), torch.float32, model_path=model_path)
+    pipe = pipeline_module.load_base_pipeline(
+        cfg, torch.device("cpu"), torch.float32, model_path=model_path
+    )
 
     modules = {
         "TextEncoder": TextEncoderWrapper(pipe.text_encoder).eval(),
         "UNet": UNetWrapper(pipe.unet).eval(),
         "VAEDecoder": VAEDecoderWrapper(pipe.vae).eval(),
     }
-    examples = build_examples(cfg, pipe, args.batch)
+    examples = build_examples(pipe, args.batch)
 
     if not args.skip_resources:
-        config = write_swift_resources(cfg, pipe, resources_dir)
+        config = write_swift_resources(cfg, pipe, resources_dir, Path(model_path))
         print(f"[stage5] Swift 資産: {resources_dir}")
-        print(f"[stage5]   vocab.json / merges.txt / pipeline_config.json")
-        print(f"[stage5]   latent={config['latent_channels']}x{config['latent_size']}^2 "
-              f"embed={config['text_embed_dim']} seq={config['max_sequence_length']}")
+        print("[stage5]   vocab.json / merges.txt / pipeline_config.json")
+        print(
+            f"[stage5]   latent={config['latent_channels']}x{config['latent_size']}^2 "
+            f"embed={config['text_embed_dim']} seq={config['max_sequence_length']}"
+        )
 
     if args.check_only:
         print("[stage5] --check-only: PyTorch のまま形を確認します（Core AI は使いません）")

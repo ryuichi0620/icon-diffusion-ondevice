@@ -21,26 +21,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from icon_diffusion import load_config  # noqa: E402
-from icon_diffusion.pipeline import (  # noqa: E402
-    attach_loras,
-    load_base_pipeline,
-    make_generator,
-    select_device,
-    select_dtype,
-)
+from icon_diffusion import load_config, load_torch_stack  # noqa: E402
 
 # 焼き込み前後の平均絶対差がこれを超えたら目視確認を促す（0-1 正規化、約 5/255）
 MAE_WARN_THRESHOLD = 0.02
 
 
-def generate(pipe, cfg, subject: str, steps: int, guidance: float, seed: int):
+def generate(pipeline_module, pipe, cfg, subject: str, steps: int, guidance: float, seed: int):
+    """同じ seed で同じ絵を出す。焼き込み前後の比較に使うので再現性が要る。"""
     return pipe(
         cfg.style.prompt(subject),
         negative_prompt=cfg.style.negative_prompt or None,
         num_inference_steps=steps,
         guidance_scale=guidance,
-        generator=make_generator(seed),
+        generator=pipeline_module.make_generator(seed),
     ).images[0]
 
 
@@ -60,13 +54,16 @@ def main(argv: list[str] | None = None) -> int:
     lcm_weight = cfg.preview.lcm_weight if args.lcm_weight is None else args.lcm_weight
     output_dir = Path(args.output).expanduser() if args.output else cfg.fuse.output_dir
 
-    device = select_device(args.device)
-    dtype = select_dtype(device)
+    # 重い依存はここまで遅らせる（--help と引数チェックは torch 無しで通る）
+    _, pipeline_module = load_torch_stack()
+
+    device = pipeline_module.select_device(args.device)
+    dtype = pipeline_module.select_dtype(device)
     print(f"[stage4] device={device} dtype={dtype}")
     print(f"[stage4] style_weight={style_weight} lcm_weight={lcm_weight}")
 
-    pipe = load_base_pipeline(cfg, device, dtype)
-    adapters = attach_loras(
+    pipe = pipeline_module.load_base_pipeline(cfg, device, dtype)
+    adapters = pipeline_module.attach_loras(
         pipe,
         cfg,
         style_lora_dir=args.lora_dir,
@@ -79,7 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     before = None
     if not args.skip_verify:
         print(f"[stage4] 焼き込み前の参照画像を生成: '{subject}'")
-        before = generate(pipe, cfg, subject, cfg.preview.steps, cfg.preview.guidance_scale, cfg.preview.seed)
+        before = generate(
+            pipeline_module, pipe, cfg, subject,
+            cfg.preview.steps, cfg.preview.guidance_scale, cfg.preview.seed,
+        )
 
     # diffusers のバージョンによって fuse_lora のシグネチャが違うので両対応にする
     try:
@@ -103,7 +103,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if before is not None:
         print("[stage4] 焼き込み後の同条件画像を生成して比較します")
-        after = generate(pipe, cfg, subject, cfg.preview.steps, cfg.preview.guidance_scale, cfg.preview.seed)
+        after = generate(
+            pipeline_module, pipe, cfg, subject,
+            cfg.preview.steps, cfg.preview.guidance_scale, cfg.preview.seed,
+        )
 
         a = np.asarray(before, dtype=np.float32) / 255.0
         b = np.asarray(after, dtype=np.float32) / 255.0

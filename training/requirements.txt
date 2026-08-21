@@ -3,6 +3,7 @@ pillow>=10.2
 numpy>=1.26
 
 # Stage 2〜4（学習・LCM 検証・fuse）
+# smoke_test.py は torch 2.13 / diffusers 0.40 / transformers 5.15 / peft 0.20 で通してある
 torch>=2.4
 diffusers>=0.31
 transformers>=4.44

@@ -1,7 +1,13 @@
-# training — Mac 側のパイプライン（Stage 1〜5）
+# training — Mac 側のパイプライン
 
 `configs/icon_lora.toml` が全ステージ共有の単一の情報源。スクリプトの CLI 引数は
 「その場で試すための上書き」であって、恒久的な設定はすべて TOML に書く。
+
+**モデルを完成させるだけなら Stage 1 → 2 → 3 → `generate.py` の 4 つ。**
+Stage 4（焼き込み）と Stage 5（Core AI 変換）は端末に載せる段の話なので後回しでよい。
+
+すべてのスクリプトは `--help` が torch 無しで動く。数 GB の依存を入れる前に
+オプションを確認できるよう、重いインポートは実行直前まで遅らせてある。
 
 ## セットアップ
 
@@ -12,6 +18,28 @@ python -c "import sys; sys.path.insert(0,'src'); from icon_diffusion.config impo
 ```
 
 Stage 1 だけなら `pillow` と `numpy` があれば動く。torch は Stage 2 から。
+
+## まず配管を確認する
+
+```bash
+python scripts/smoke_test.py
+```
+
+ランダムな重みの極小モデル（画像 64x64）をその場で組み立てて、
+Stage 3 → generate → Stage 4 → Stage 5(--check-only) を実際に走らせる。
+**ネットワークも実モデルも要らず、数秒で終わる。**
+
+出てくる絵はただのノイズ。確かめているのは配管が通っているかどうか:
+
+- LCM スケジューラが差さるか
+- LoRA 2 枚の重ね掛けと重み設定が効くか（重み 0.0 と 1.0 で絵が変わることを確認する）
+- 焼き込みと保存・読み直しができるか
+- 背景の透過・コンタクトシート・マニフェストが出るか
+- Core AI に渡す 3 モデルの分割が形として成立しているか
+- `pipeline_config.json` の image_size が実際の生成サイズと一致するか
+
+数 GB のベースモデルを落とす前、半日かけて学習する前に、
+手元の環境でコードが動くことだけ先に確かめられる。
 
 ## 各ステージ
 
@@ -59,7 +87,34 @@ python scripts/03_preview_lcm.py --sweep-style 0.4 0.6 0.8 1.0   # 効き具合�
 
 出力: `outputs/preview/{*.png, contact_sheet.png, preview.json}`
 
-### Stage 4 — LoRA を焼き込む
+### generate.py — 完成したモデルで量産する
+
+```bash
+python scripts/generate.py --prompts prompts.example.txt --count 4 --transparent
+python scripts/generate.py --subjects "a coffee cup" "a house key" --count 2
+python scripts/generate.py --model outputs/fused --prompts prompts.example.txt   # 焼き込み済みを使う
+```
+
+Stage 3 が「LoRA の効きを**診断する**」道具なのに対して、こちらは「できたモデルを**使う**」道具。
+スタイル重みのスイープは無く、代わりに被写体リスト・枚数・背景の透過・再現用の記録がある。
+
+`prompts.example.txt` には**被写体だけ**を 1 行 1 件で書く。トリガーワードとスタイル語は
+`prompt_template` が自動で付ける（`a coffee cup` → `an icon in ICONST style, a coffee cup, flat, minimal`）。
+
+`--transparent` は背景を抜いて RGBA で保存する。拡散モデルは必ず塗りつぶした背景を描くので、
+アイコンとして使うならここが要る。仕組みは:
+
+1. 外周 2 ピクセルの中央値を背景色とみなす
+2. **外周から連続してつながっている領域だけ**を背景と判定する
+3. 輪郭のアンチエイリアス部分は半透明にし、alpha で割り戻して前景色を復元する
+
+2 が肝で、単に「背景色に近い画素を消す」とアイコンの内側にある白抜きまで消える。
+3 が無いと縁に背景色のふちが残る。
+
+出力: `outputs/generated/{*.png, contact_sheet.png, manifest.json}`
+`manifest.json` にはどの seed・どのプロンプトから出たかが入るので、気に入った 1 枚を再現できる。
+
+### Stage 4 — LoRA を焼き込む（端末に載せる段で）
 
 ```bash
 python scripts/04_fuse_lora.py
@@ -71,7 +126,7 @@ python scripts/04_fuse_lora.py --device cpu   # fp32 で焼き直す（差が出
 
 出力: `outputs/fused/`（+ `outputs/fuse_compare/before_fuse.png`, `after_fuse.png`）
 
-### Stage 5 — Core AI 形式へ変換
+### Stage 5 — Core AI 形式へ変換（端末に載せる段で）
 
 ```bash
 python scripts/05_export_coreai.py --check-only   # まず PyTorch のまま形だけ確認
@@ -109,6 +164,12 @@ PyTorch で実行し、入出力の形を表示する。Stage 5〜6 が難所な
 
 ## 動作確認できている範囲
 
+- **Stage 3 / generate / Stage 4 / Stage 5(--check-only) は極小モデルで通しで実行済み**
+  （`smoke_test.py`。diffusers 0.40 / transformers 5.15 / peft 0.20 で確認）
 - Stage 1 は合成データで通しで実行・検証済み（前処理・キャプション・警告経路）
+- 背景の透過は検証済み。アイコン内側の白抜きを残したまま外周だけ抜けることを、
+  単純な色しきい値との対照実験つきで確認
 - Stage 2 は `--dry-run` で両モードのコマンド生成を確認済み
-- **Stage 3〜5 は未実行**。torch と実モデルが必要なので Mac 側での確認待ち
+- 全スクリプトの `--help` が torch 無しで通ることを確認
+
+**実モデル（SD1.5 級）での学習と生成は未実施。** 絵の品質は Mac 側で確かめること。

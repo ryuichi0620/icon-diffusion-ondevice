@@ -1,108 +1,134 @@
 # icon-diffusion-ondevice
 
-キャッチーでシンプルなアイコンを、**iPhone の中だけで**生成するプロジェクト。
+キャッチーでシンプルなアイコンを生成するモデルを作る。
+最終的に iPhone のオンデバイスで動かすのが目標だが、**まずはモデルを完成させる**。
 
 基本方針は一行で言うと **「速くする LoRA は既製品を借り、アイコンらしさの LoRA だけ自分で作る」**。
 少ステップ化（LCM）を自前で蒸留するのは手数が多いので、そこは配布済みのものに乗る。
 
-- 企画メモ: [docs/plan.md](docs/plan.md)（Notion 原本の内容をリポジトリに固定したもの）
-- 設計: [docs/architecture.md](docs/architecture.md)
-- データセット方針: [docs/dataset.md](docs/dataset.md)
+---
 
-## 全体像
+## いまやること — モデルを完成させる
 
-```
-[クラウドAIで生成したアイコン画像]
-        │  Stage 1  training/scripts/01_prepare_dataset.py
-        ▼
-[512x512 + captions の学習セット]
-        │  Stage 2  training/scripts/02_train_lora.sh
-        ▼
-[アイコン風スタイル LoRA]  ── ＋ 既製の LCM-LoRA（高速化）
-        │  Stage 3  training/scripts/03_preview_lcm.py   ← Mac で 4 ステップの質感チェック
-        │  Stage 4  training/scripts/04_fuse_lora.py     ← LoRA を UNet に焼き込む
-        ▼
-[一体型の SD1.5 パイプライン]
-        │  Stage 5  training/scripts/05_export_coreai.py
-        ▼
-[TextEncoder.aimodel / UNet.aimodel / VAEDecoder.aimodel]
-        │  Stage 6  ios/IconDiffusionKit
-        ▼
-[iOS アプリ内で 4 ステップ生成]
-```
-
-## リポジトリ構成
+**フォルダに素材を入れて、フォルダにアイコンが出てくる**ところまで。iOS は関係ない。
 
 ```
-training/            Mac 側。データ整形 → LoRA 学習 → LCM 検証 → fuse → Core AI 変換
-  configs/           全ステージが読む単一の設定ファイル
-  scripts/           Stage 1〜5 を番号順に実行する
-  src/icon_diffusion 各スクリプトが共有するロジック
-ios/IconDiffusionKit Swift Package。トークナイザ・LCM スケジューラ・推論ループ
-  Sources/           バックエンド抽象を挟んで Core AI 依存を 1 ファイルに閉じ込めている
-  Tests/             スケジューラとトークナイザは Core AI 無しで検証できる
-docs/                企画・設計・データセット方針
+ ~/icons_raw/                     クラウドAIで作ったアイコン画像を放り込む
+      │
+      │  make smoke               まず配管の確認（数秒・モデル不要）
+      │  make dataset             Stage 1  整形＋スタイルの揃い具合を検査
+      ▼
+ training/data/processed/         512x512 ＋ captions
+      │
+      │  make train               Stage 2  アイコン風スタイル LoRA を学習
+      ▼
+ training/outputs/icon-lora/      自作 LoRA（ここが唯一の自作物）
+      │
+      │  make preview             Stage 3  既製の LCM-LoRA と重ねて 4 ステップ生成
+      ▼                                    ← ここが最初の山
+ training/outputs/preview/        効き具合の確認用
+      │
+      │  make generate            量産。背景を透過にして書き出す
+      ▼
+ training/outputs/generated/      *.png ＋ contact_sheet.png ＋ manifest.json
 ```
-
-## 使い方
-
-### Mac 側（Stage 1〜5）
 
 ```bash
 cd training
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Stage 1: 生成済みアイコンを 512x512 + captions に整形
-python scripts/01_prepare_dataset.py --input ~/Downloads/icons_raw
-
-# Stage 2: スタイル LoRA を学習（MPS でも回るが、遅ければ時間貸し GPU）
+python scripts/smoke_test.py                       # 配管の確認（数秒・モデル不要）
+python scripts/01_prepare_dataset.py --input ~/icons_raw
 ./scripts/02_train_lora.sh
-
-# Stage 3: LCM-LoRA と重ねて 4 ステップ生成。ここが最初の山
-python scripts/03_preview_lcm.py --steps 4
-
-# Stage 4: 納得したら UNet に焼き込む
-python scripts/04_fuse_lora.py
-
-# Stage 5: Core AI 形式へ変換（3 モデル）
-python scripts/05_export_coreai.py
+python scripts/03_preview_lcm.py --sweep-style 0.4 0.6 0.8 1.0
+python scripts/generate.py --prompts prompts.example.txt --count 4 --transparent
 ```
 
-`make help` に同じことを短縮形で並べてある。
+### 「完成」をどこで判定するか
 
-### iOS 側（Stage 6）
+決めておかないと終わらない。おすすめの線引き:
 
-```bash
-cd ios/IconDiffusionKit
-swift test          # スケジューラ・トークナイザの検証（Core AI 不要）
+> `prompts.example.txt` の 12 被写体 × 4 枚 = 48 枚を **4 ステップ**で生成し、
+> そのうち **7 割以上**が「そのままアイコンとして使える」なら合格。
+
+`contact_sheet.png` を眺めて数えるだけでよい。落ちたときの手当ては下の「詰まったら」を参照。
+
+### このプロジェクトで一番危ういところ
+
+**LCM-LoRA（速くする）と スタイル LoRA（アイコンらしくする）の重ね掛けは、互いを弱める。**
+どちらも同じ層に効くので、片方を強くするともう片方が薄まる。
+「4 ステップでアイコンらしく出るか」が最初の山だと企画メモが書いているのは、実質これのこと。
+
+だから Stage 3 に `--sweep-style` がある。被写体を固定して重みだけ振り、
+効きの当たりを取ってから量産に進む。
+
+### 詰まったら
+
+| 症状 | 手当て |
+| --- | --- |
+| 4 ステップだと崩れる | `--steps 8` にする。速度は端末に載せる段で詰めればよい |
+| アイコンらしくない（写真的・立体的） | `--style-weight` を上げる。それでも駄目なら学習データのスタイルが揃っていない |
+| スタイルは出るが被写体が出ない | `--style-weight` を下げる。焼き付きなら `max_train_steps` を減らす |
+| 全体にぼやける | `--lcm-weight` を下げる。LCM が強すぎる |
+| そもそも 4 ステップが厳しい | ベースを `stabilityai/sd-turbo` に変える（`configs/icon_lora.toml`） |
+
+学習データ側が原因のことも多い。Stage 1 が出す `report.json` の警告を先に見ること。
+
+---
+
+## あとでやること — iPhone に載せる
+
+モデルが固まってから着手する。**いまは触らなくてよい。**
+
+```
+ outputs/icon-lora/
+      │  make fuse                Stage 4  LoRA を UNet に焼き込んで一体型にする
+      ▼
+ outputs/fused/
+      │  make export              Stage 5  Core AI 形式（3 モデル）へ変換
+      ▼
+ outputs/coreai/*.aimodel
+      │                           Stage 6  ios/IconDiffusionKit で 4 ステップ推論
+      ▼
+ iOS アプリ内で生成
 ```
 
-アプリからは Swift Package として追加し、Stage 5 で出力した 3 つの `.aimodel` と
-`vocab.json` / `merges.txt` をバンドルに入れて使う。
+Swift 側（`ios/IconDiffusionKit`）は先に書いてあるが、Core AI の API は**未検証**。
+詳しくは [ios/IconDiffusionKit/README.md](ios/IconDiffusionKit/README.md)。
 
-```swift
-let pipeline = try IconDiffusionPipeline(resources: .bundled(in: .main))
-let image = try await pipeline.generate(
-    prompt: "a coffee cup, flat, minimal",
-    options: .init(steps: 4, guidanceScale: 1.0, seed: 42)
-)
+---
+
+## リポジトリ構成
+
+```
+training/            Mac 側。ここだけでモデルは完成する
+  configs/           全ステージが読む単一の設定ファイル
+  scripts/           01〜05 と generate.py
+  src/icon_diffusion 各スクリプトが共有するロジック
+  prompts.example.txt 生成する被写体のリスト
+ios/IconDiffusionKit Swift Package。端末に載せる段になってから
+docs/                企画・設計・データセット方針
 ```
 
-## 現状と既知の未確定事項
+- 企画メモ: [docs/plan.md](docs/plan.md)（Notion 原本の内容をリポジトリに固定したもの）
+- 設計: [docs/architecture.md](docs/architecture.md)
+- データセット方針: [docs/dataset.md](docs/dataset.md)
+- 学習パイプラインの詳細: [training/README.md](training/README.md)
 
-このリポジトリは企画からの初期スキャフォールドで、**まだ一度も通しで動かしていない**。
-特に以下は実機・実 API での確認が必要:
+`make help` で各ステージの入口を一覧できる。
 
-- **Core AI の API 名**（`coreai_torch.TorchConverter` / `import CoreAI` / `AIModel` / `NDArray`）は
-  企画メモに書かれた形をそのまま写している。WWDC26 のセッション 324 / 325 と
-  `apple/coreai-torch` の実物に対して要検証。該当箇所には `TODO(core-ai)` を付けてある。
-  Swift 側は `DiffusionBackend` プロトコルを挟んであるので、API がずれても
-  `CoreAIBackend.swift` の差し替えで済む。
-- **Swift 側はこの環境ではコンパイルしていない**（Linux コンテナに Swift ツールチェーンが無い）。
-  Mac で `swift test` を通すのが最初の作業になる。
-- ベースモデルの選定（SD-Turbo か SD1.5＋LCM-LoRA）は未決。`configs/icon_lora.toml` の
-  `base_model` を差し替えれば Stage 2〜5 は追従する。
+## 動作確認できている範囲
+
+- **Stage 3 / generate / Stage 4 / Stage 5** — 極小モデルで通しで実行済み（`make smoke`）。
+  LoRA 2 枚の重ね掛け・重み変更・焼き込み・3 モデル分割まで動く
+- **Stage 1** — 合成データで通しで実行・検証済み（前処理・キャプション・スタイル逸脱の検出）
+- **背景の透過** — 検証済み。アイコン内側の白抜きを残したまま外周だけ抜けることを確認
+- **Stage 2** — `--dry-run` で両モードのコマンド生成を確認
+- **Swift 側** — ロジックは Python 参照実装との一致を確認済み。コンパイルは未実施
+
+**実モデル（SD1.5 級）での学習・生成は未実施。** 配管は通っているが、
+絵の品質は Mac 側で実際に回して見るしかない。
 
 ## ライセンス・権利まわり
 
