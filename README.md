@@ -111,6 +111,7 @@ ios/IconDiffusionKit Swift Package。端末に載せる段になってから
 docs/                企画・設計・データセット方針
 ```
 
+- **検証手順: [docs/verification.md](docs/verification.md)** — 何を実行して何を見るか。まずここ
 - 企画メモ: [docs/plan.md](docs/plan.md)（Notion 原本の内容をリポジトリに固定したもの）
 - 設計: [docs/architecture.md](docs/architecture.md)
 - データセット方針: [docs/dataset.md](docs/dataset.md)

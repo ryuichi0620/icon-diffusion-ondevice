@@ -40,15 +40,21 @@ CONFIG_ARGS=(--shell)
 eval "$(PYTHONPATH="$TRAINING_ROOT/src" python3 -c 'import sys; from icon_diffusion.config import main; sys.exit(main())' "${CONFIG_ARGS[@]}")"
 
 # ---- 前提チェック ----
-if [[ ! -d "$CFG_IMAGES_DIR" ]]; then
-  echo "エラー: 学習画像がありません: $CFG_IMAGES_DIR" >&2
-  echo "先に Stage 1 を実行してください: python scripts/01_prepare_dataset.py" >&2
-  exit 1
+# --dry-run は「実行前にコマンドを確認する」ためのものなので、学習画像が無くても止めない。
+# 代わりに警告を出す（本番実行なら止める）。
+IMAGE_COUNT=0
+if [[ -d "$CFG_IMAGES_DIR" ]]; then
+  IMAGE_COUNT=$(find "$CFG_IMAGES_DIR" -maxdepth 1 -name '*.png' | wc -l | tr -d ' ')
 fi
-IMAGE_COUNT=$(find "$CFG_IMAGES_DIR" -maxdepth 1 -name '*.png' | wc -l | tr -d ' ')
 if [[ "$IMAGE_COUNT" -eq 0 ]]; then
-  echo "エラー: $CFG_IMAGES_DIR に PNG が 1 枚もありません" >&2
-  exit 1
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[stage2] ⚠ 学習画像がありません: $CFG_IMAGES_DIR" >&2
+    echo "[stage2]   コマンドの確認だけ行います。本番前に Stage 1 を実行してください" >&2
+  else
+    echo "エラー: 学習画像がありません: $CFG_IMAGES_DIR" >&2
+    echo "先に Stage 1 を実行してください: python scripts/01_prepare_dataset.py" >&2
+    exit 1
+  fi
 fi
 
 # --dry-run は「実行せずコマンドを見る」ためのものなので、学習用の依存は要求しない
@@ -95,7 +101,10 @@ ARGS=(
 [[ -n "$CFG_REVISION" ]] && ARGS+=(--revision="$CFG_REVISION")
 
 if [[ "$MODE" == "captions" ]]; then
-  [[ -f "$CFG_DATASET_DIR/metadata.jsonl" ]] || { echo "エラー: $CFG_DATASET_DIR/metadata.jsonl がありません（Stage 1 の出力）" >&2; exit 1; }
+  if [[ ! -f "$CFG_DATASET_DIR/metadata.jsonl" && "$DRY_RUN" -eq 0 ]]; then
+    echo "エラー: $CFG_DATASET_DIR/metadata.jsonl がありません（Stage 1 の出力）" >&2
+    exit 1
+  fi
   ARGS+=(
     --train_data_dir="$CFG_DATASET_DIR"
     --caption_column=text

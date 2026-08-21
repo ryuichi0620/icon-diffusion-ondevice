@@ -62,7 +62,7 @@ python scripts/01_prepare_dataset.py --input ./raw --captions captions.csv --lim
 ### Stage 2 — スタイル LoRA を学習
 
 ```bash
-./scripts/02_train_lora.sh --dry-run     # 実行されるコマンドを確認（依存もネットワークも不要）
+./scripts/02_train_lora.sh --dry-run     # 実行されるコマンドを確認（依存・ネットワーク・学習画像すべて不要）
 ./scripts/02_train_lora.sh               # DreamBooth-LoRA（既定・企画メモどおり）
 ./scripts/02_train_lora.sh --captions    # Stage 1 の per-image キャプションを使う
 ```
