@@ -112,6 +112,7 @@ docs/                企画・設計・データセット方針
 ```
 
 - **検証手順: [docs/verification.md](docs/verification.md)** — 何を実行して何を見るか。まずここ
+- 作業時の取り決め: [CLAUDE.md](CLAUDE.md)
 - 企画メモ: [docs/plan.md](docs/plan.md)（Notion 原本の内容をリポジトリに固定したもの）
 - 設計: [docs/architecture.md](docs/architecture.md)
 - データセット方針: [docs/dataset.md](docs/dataset.md)
@@ -130,6 +131,13 @@ docs/                企画・設計・データセット方針
 
 **実モデル（SD1.5 級）での学習・生成は未実施。** 配管は通っているが、
 絵の品質は Mac 側で実際に回して見るしかない。
+
+## Notion
+
+企画の原本と、ここの文書のミラーは Notion のプロジェクトページにある。
+[アイコン生成モデル — 少ステップ拡散モデルのオンデバイス化](https://app.notion.com/p/3c32bbb6de9d813783dbc708f4839a74)
+
+`docs/` に文書を足したら、Notion 側にも子ページとして追加する（[CLAUDE.md](CLAUDE.md) 参照）。
 
 ## ライセンス・権利まわり
 
