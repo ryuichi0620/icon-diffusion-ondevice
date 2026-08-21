@@ -1,0 +1,67 @@
+# Stage 1〜5 が共有する単一の設定ファイル。
+# パスは training/ からの相対で書く（絶対パスも可）。
+
+[model]
+# ベースモデルは未決。企画メモの「次のアクション: ベースモデルの選定」参照。
+#   - SD1.5 + LCM-LoRA  … 高速化 LoRA の重ね掛けが効き、スタイル LoRA も定番手順が使える（既定）
+#   - stabilityai/sd-turbo … 最初から少ステップ。LCM-LoRA 不要だがライセンス条件を確認すること
+# 元の runwayml/stable-diffusion-v1-5 は 2024/08 に HF から取り下げ済み。現存するミラーを指す。
+base_model = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+revision = ""
+
+# 少ステップ化は自作せず既製品を借りる（本プロジェクトの基本方針）
+lcm_lora = "latent-consistency/lcm-lora-sdv1-5"
+
+[style]
+# 一度決めたら Stage 2〜6 で変えないこと。学習時と生成時で不一致だとスタイルが呼び出せない。
+trigger_word = "ICONST"
+prompt_template = "an icon in {trigger} style, {subject}, flat, minimal"
+fallback_subject = "a simple object"
+negative_prompt = "photo, 3d, gradient, shadow, text, watermark, cluttered"
+
+[dataset]
+input_dir = "data/raw"
+output_dir = "data/processed"
+resolution = 512
+# 透過 PNG を合成する背景色
+background = "#FFFFFF"
+
+[train]
+output_dir = "outputs/icon-lora"
+rank = 16
+learning_rate = 1e-4
+max_train_steps = 800
+train_batch_size = 1
+gradient_accumulation_steps = 1
+seed = 42
+# MPS では fp16 学習が不安定なことがあるため既定は no。CUDA を借りるなら "fp16"。
+mixed_precision = "no"
+checkpointing_steps = 200
+
+[preview]
+output_dir = "outputs/preview"
+steps = 4
+# Mac での質感確認は企画メモどおり 1.2。端末側は 1.0（CFG なし）が既定。
+# docs/architecture.md の「CFG を使うか」を参照。
+guidance_scale = 1.2
+style_weight = 0.8
+lcm_weight = 1.0
+seed = 42
+subjects = [
+  "a coffee cup",
+  "a house key",
+  "a calendar",
+  "a paper airplane",
+  "a light bulb",
+  "a shopping bag",
+]
+
+[fuse]
+output_dir = "outputs/fused"
+
+[export]
+output_dir = "outputs/coreai"
+# Swift Package にトークナイザ資産と pipeline_config.json を書き出す先
+swift_resources_dir = "../ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources"
+# TODO(core-ai): 量子化の指定方法は coreai-optimization の実物に合わせて要調整
+quantize = "int8"

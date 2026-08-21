@@ -1,0 +1,50 @@
+# ---------- macOS ----------
+.DS_Store
+._*
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---------- 学習データ・成果物 ----------
+# 生成した画像・学習済み重み・変換済みモデルはリポジトリに入れない。
+# 置き場所は決めておきたいので .gitkeep だけ追跡する。
+training/data/**
+!training/data/.gitkeep
+training/outputs/**
+!training/outputs/.gitkeep
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+*.pth
+*.aimodel
+*.mlpackage
+*.mlmodelc
+
+# トークナイザ資産は 05_export_coreai.py が取得する（サイズが大きい）
+ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources/vocab.json
+ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources/merges.txt
+
+# ---------- Xcode / SwiftPM ----------
+build/
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+
+# ---------- 秘密情報 ----------
+.env
+*.pem
+*.p12
+
+# ---------- Claude Code ----------
+.claude/settings.local.json
+
+# diffusers から取得した学習スクリプトのキャッシュ
+training/.vendor/

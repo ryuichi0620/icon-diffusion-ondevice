@@ -1,0 +1,18 @@
+# Stage 1（データ整形）だけならこの 2 つで足りる
+pillow>=10.2
+numpy>=1.26
+
+# Stage 2〜4（学習・LCM 検証・fuse）
+torch>=2.4
+diffusers>=0.31
+transformers>=4.44
+accelerate>=0.34
+peft>=0.13
+safetensors>=0.4
+datasets>=2.20
+
+# Stage 5（Core AI 変換）
+# TODO(core-ai): パッケージ名・バージョンは WWDC26 の実物に対して要確認。
+# 企画メモには `pip install coreai-torch` とだけある。
+# coreai-torch
+# coreai-optimization
