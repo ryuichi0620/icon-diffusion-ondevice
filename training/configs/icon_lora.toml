@@ -44,7 +44,9 @@ steps = 4
 # Mac での質感確認は企画メモどおり 1.2。端末側は 1.0（CFG なし）が既定。
 # docs/architecture.md の「CFG を使うか」を参照。
 guidance_scale = 1.2
-style_weight = 0.8
+# 2026-08-22 の実測で決めた値。0.4/0.6/0.8/1.0 と 1.0/1.3/1.6/2.0 を振り、
+# 1.0 が最良。1.3 以上は被写体が崩れる（焼き付き側）。
+style_weight = 1.0
 lcm_weight = 1.0
 seed = 42
 subjects = [

@@ -5,6 +5,9 @@ numpy>=1.26
 # Stage 2〜4（学習・LCM 検証・fuse）
 # smoke_test.py は torch 2.13 / diffusers 0.40 / transformers 5.15 / peft 0.20 で通してある
 torch>=2.4
+# diffusers の train_dreambooth_lora.py が torchvision を直接 import する。
+# 我々のコードは使わないので忘れやすいが、無いと Stage 2 が起動直後に落ちる。
+torchvision>=0.19
 diffusers>=0.31
 transformers>=4.44
 accelerate>=0.34
@@ -12,8 +15,16 @@ peft>=0.13
 safetensors>=0.4
 datasets>=2.20
 
-# Stage 5（Core AI 変換）
-# TODO(core-ai): パッケージ名・バージョンは WWDC26 の実物に対して要確認。
-# 企画メモには `pip install coreai-torch` とだけある。
-# coreai-torch
-# coreai-optimization
+# Stage 5（Core AI 変換）は **別の venv** で動かす。ここには書かない。
+#
+# 理由: coreai-torch が torch<=2.11 を要求し、上の torch>=2.4（実際に使っているのは 2.13）と
+# 両立しない。さらに coreai-core / coreai-opt は Python<3.14 なので、インタプリタも分ける。
+#
+#   /opt/homebrew/opt/python@3.13/bin/python3.13 -m venv .venv-coreai
+#   .venv-coreai/bin/pip install "torch>=2.8,<=2.11.0" coreai-torch coreai-opt \
+#       diffusers transformers accelerate safetensors pillow numpy
+#   .venv-coreai/bin/python scripts/05_export_coreai.py --quantize int8
+#
+# 2026-08-22 に実物で確認した版: coreai-torch 0.4.1 / coreai-core 1.0.0b2 / coreai-opt 0.2.1。
+# 企画メモの `coreai-optimization` はリポジトリ名で、PyPI 名は `coreai-opt`。
+# coreai-core は macOS 26.0+ 向けのバイナリホイールのみ。

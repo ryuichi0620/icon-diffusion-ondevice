@@ -6,6 +6,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-coreai/
 venv/
 *.egg-info/
 .ipynb_checkpoints/
@@ -15,6 +16,9 @@ venv/
 # 置き場所は決めておきたいので .gitkeep だけ追跡する。
 training/data/**
 !training/data/.gitkeep
+# 出所の記録だけは追跡する。データ本体は入れないが「どこから来たか」は
+# 後から説明できる必要がある（docs/dataset.md の権利まわり）。
+!training/data/SOURCE.md
 training/outputs/**
 !training/outputs/.gitkeep
 *.safetensors

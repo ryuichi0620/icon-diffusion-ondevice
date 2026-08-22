@@ -116,6 +116,7 @@ docs/                企画・設計・データセット方針
 - 企画メモ: [docs/plan.md](docs/plan.md)（Notion 原本の内容をリポジトリに固定したもの）
 - 設計: [docs/architecture.md](docs/architecture.md)
 - データセット方針: [docs/dataset.md](docs/dataset.md)
+- **実験ログ: [docs/experiments.md](docs/experiments.md)** — 歩留まりを上げるために何を試し、なぜそれを選んだか
 - 学習パイプラインの詳細: [training/README.md](training/README.md)
 
 `make help` で各ステージの入口を一覧できる。
