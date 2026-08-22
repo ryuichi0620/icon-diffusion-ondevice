@@ -302,7 +302,26 @@ def main(argv: list[str] | None = None) -> int:
         expect(root / "swift-resources" / "vocab.json", "swift-resources/vocab.json")
 
         exported = json.loads((root / "swift-resources" / "pipeline_config.json").read_text(encoding="utf-8"))
-        assert exported["verification"]["timesteps_4step"] == [999, 759, 519, 279], "LCM のタイムステップが違う"
+        # 以前はここで [999, 759, 519, 279] という定数と比べていたが、書き出し側も同じ定数を
+        # ハードコードしていたので「定数が定数自身と等しい」ことを確かめるだけになっていた。
+        # diffusers がタイムステップの選び方を変えても気づけなかった原因。
+        # いまは diffusers に実際に計算させた値と突き合わせる。
+        from diffusers import LCMScheduler  # noqa: PLC0415
+
+        reference = LCMScheduler(
+            num_train_timesteps=exported["num_train_timesteps"],
+            beta_start=exported["beta_start"],
+            beta_end=exported["beta_end"],
+            beta_schedule=exported["beta_schedule"],
+            original_inference_steps=exported["original_inference_steps"],
+            timestep_scaling=exported["timestep_scaling"],
+        )
+        reference.set_timesteps(4)
+        expected_timesteps = [int(t) for t in reference.timesteps]
+        assert exported["verification"]["timesteps_4step"] == expected_timesteps, (
+            f"LCM のタイムステップが diffusers と違う: "
+            f"{exported['verification']['timesteps_4step']} != {expected_timesteps}"
+        )
 
         # config が言う画像サイズと、実際に生成された画像のサイズが一致すること。
         # ここがズレると Swift 側が形の合わないテンソルを受け取る。

@@ -117,21 +117,25 @@ public struct LCMScheduler: Sendable {
         }
     }
 
-    /// LCM の飛び飛びタイムステップ。4 ステップなら `[999, 759, 519, 279]`。
+    /// LCM の飛び飛びタイムステップ。4 ステップなら `[999, 759, 499, 259]`。
     ///
-    /// diffusers の `lcm_origin_timesteps[::-skipping_step][:num_inference_steps]` と同じ並び。
+    /// diffusers の `set_timesteps` と同じく、**降順に並べた候補から等間隔のインデックスを
+    /// 取る**（`np.linspace(0, n, num, endpoint=False)` を floor したもの）。
+    ///
+    /// 以前は旧来の `lcm_origin_timesteps[::-skipping_step]` を実装していて
+    /// `[999, 759, 519, 279]` を返していた。diffusers 側が等間隔インデックス方式に
+    /// 変わったため合わなくなっていたが、Python 側の検査が定数同士の比較になっていて
+    /// 気づけなかった。**期待値は `pipeline_config.json` の `verification` から来る実測値。**
     private static func makeTimesteps(_ configuration: Configuration, inferenceSteps: Int) -> [Int] {
         let k = configuration.numTrainTimesteps / configuration.originalInferenceSteps
-        let origin = (1...configuration.originalInferenceSteps).map { $0 * k - 1 }
-        let skipping = max(1, configuration.originalInferenceSteps / inferenceSteps)
+        // 昇順の候補 [k-1, 2k-1, ..., 999] を降順にする
+        let descending = (1...configuration.originalInferenceSteps).map { $0 * k - 1 }.reversed()
+        let candidates = Array(descending)
 
-        var result: [Int] = []
-        var index = origin.count - 1
-        while index >= 0 && result.count < inferenceSteps {
-            result.append(origin[index])
-            index -= skipping
+        return (0..<inferenceSteps).map { index in
+            let position = Double(index) * Double(candidates.count) / Double(inferenceSteps)
+            return candidates[Int(position.rounded(.down))]
         }
-        return result
     }
 
     public func alphaCumprod(at timestep: Int) -> Double {

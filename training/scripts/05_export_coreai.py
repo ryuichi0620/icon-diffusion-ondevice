@@ -14,8 +14,8 @@
   - vocab.json / merges.txt      CLIP トークナイザ（Swift 実装が読む）
   - pipeline_config.json         β スケジュール等。Swift のスケジューラをこれに従わせる
 
-TODO(core-ai): coreai_torch / coreai_opt の API 名は企画メモの記述をそのまま写している。
-WWDC26 セッション 324 / 325 と apple/coreai-torch の実物に対して要検証。
+coreai_torch の API は 2026-08-22 に実物（0.4.1）で検証済み。export_module() 参照。
+TODO(core-ai): coreai_opt（量子化）は未検証・未実装。_apply_quantization() 参照。
 変換部分は export_module() に閉じてあるので、ずれてもそこだけ直せばよい。
 
 なお **iOS に載せるのは後回しでよい**。モデルを完成させるだけなら Stage 1〜3（＋generate.py）
@@ -35,14 +35,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from icon_diffusion import load_config, load_torch_stack  # noqa: E402
 
-# LCM の 4 ステップは既知の固定値。Swift 側のテストと突き合わせるために書き出す
-LCM_4STEP_TIMESTEPS = [999, 759, 519, 279]
+# Swift 側のテストと突き合わせる 4 ステップのタイムステップは、**必ず実際の
+# スケジューラから導出する**。以前はここに [999, 759, 519, 279] をハードコードしていて、
+# smoke_test はその定数が pipeline_config.json に書かれた同じ定数と等しいことを
+# 確かめるだけの空虚な検査になっていた（だから通り続けた）。
+# 実際の diffusers は等間隔インデックスで選ぶので [999, 759, 499, 259] になる。
+LCM_VERIFICATION_STEPS = 4
+
+
+def lcm_timesteps(pipe, steps: int = LCM_VERIFICATION_STEPS) -> list[int]:
+    """実際のスケジューラに 4 ステップを設定して、そのタイムステップを取り出す。"""
+    from diffusers import LCMScheduler  # noqa: PLC0415
+
+    scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    scheduler.set_timesteps(steps)
+    return [int(t) for t in scheduler.timesteps]
 
 
 def export_module(module, sample: tuple, out_path: Path, quantize: str) -> None:
     """PyTorch モジュールを 1 つ Core AI 形式に変換して保存する。
 
-    TODO(core-ai): ここが企画メモの記述をそのまま写した部分。API がずれたらこの関数だけ直す。
+    2026-08-22 に coreai-torch 0.4.1 / coreai-core 1.0.0b2 の実物に対して検証済み。
+    企画メモの記述のうち `program.save()` だけが誤りで、正しくは `save_asset()` だった。
+    それ以外（TorchConverter / get_decomp_table / add_exported_program / to_coreai /
+    optimize）はメモどおりの名前で実在する。
     """
     import torch
 
@@ -57,29 +73,77 @@ def export_module(module, sample: tuple, out_path: Path, quantize: str) -> None:
             f"元のエラー: {exc}"
         ) from exc
 
+    # 量子化は torch.export の前にモジュールへ当てる。変換後の program に対しては当てられない
+    # （Quantizer は nn.Module を受け取る）。ここを間違えると静かに素通しになる。
+    if quantize and quantize.lower() not in {"none", "off", ""}:
+        module = _quantize_module(module, sample, quantize)
+
     exported = torch.export.export(module, args=sample).run_decompositions(get_decomp_table())
     program = TorchConverter().add_exported_program(exported).to_coreai()
 
-    if quantize and quantize.lower() not in {"none", "off", ""}:
-        _apply_quantization(program, quantize)
-
     program.optimize()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    program.save(str(out_path))
+    # save_asset は .aimodel を「ディレクトリ」として書き出す（main.mlirb / main.hash /
+    # metadata.json を含むバンドル）。単一ファイルではないので、後段で is_file() を見ないこと。
+    # minimum_os は既定 OSVersion.v27。端末の下限を上げたいときはここで指定する。
+    program.save_asset(out_path)
 
 
-def _apply_quantization(program, quantize: str) -> None:
-    """TODO(core-ai): coreai_opt.quantization の Quantizer で圧縮をかける。
+def _quantize_module(module, sample: tuple, quantize: str):
+    """重みを int8 に量子化したモジュールを返す。
 
-    企画メモには「`coreai_opt.quantization` の Quantizer で INT8 量子化などをかける」とだけあり、
-    具体的な呼び出し方は未確認。推測で書くと黙って壊れるので、現状は警告して素通しする。
-    fp32 のままでも 3 モデル揃えば疎通確認はできる（メモリは docs/architecture.md 参照）。
+    **重みだけを量子化し、activation には触らない。** これは意図的な選択で、理由は校正データ。
+    activation を量子化するには代表的な入力を流して値の範囲を観測する必要がある（PTQ の校正）。
+    ここで手に入るのは形だけ合わせた example なので、乱数で代用すると活性値の範囲を
+    誤って学習し、**絵の品質が黙って落ちる**。サイズの大半は重みなので、
+    校正なしで安全に効く範囲に留めてある。
+
+    重み用の既定 spec は int8 / 対称 / per-channel(axis=0) で、qparams を重みから直接
+    計算する StaticQParamsCalculator を使う。だから校正データが要らない。
+
+    TODO(core-ai): activation まで量子化して更に速くしたい場合は、実際の生成から
+    中間テンソルを捕まえて校正データにすること。Quantizer.calibration_mode() を使う。
     """
-    print(
-        f"[stage5] ⚠ 量子化 ({quantize}) は未実装のためスキップします。\n"
-        "         coreai_opt.quantization の API を確認して _apply_quantization() を実装してください。\n"
-        "         fp16 のまま 3 モデル載せると 2GB を超えるので、端末で動かす前に必須です。"
+    import torch  # noqa: PLC0415
+
+    if quantize.lower() not in {"int8"}:
+        raise SystemExit(
+            f"未対応の量子化指定です: {quantize}\n"
+            "  configs/icon_lora.toml の export.quantize は int8 / none のみ対応しています。"
+        )
+
+    try:
+        from coreai_opt import ExportBackend  # type: ignore  # noqa: PLC0415
+        from coreai_opt.quantization import (  # type: ignore  # noqa: PLC0415
+            ModuleQuantizerConfig,
+            Quantizer,
+            QuantizerConfig,
+        )
+        from coreai_opt.quantization.config.quantization_config import (  # type: ignore  # noqa: PLC0415
+            default_weight_quantization_spec,
+        )
+    except ImportError as exc:  # pragma: no cover - 環境依存
+        raise SystemExit(
+            "coreai-opt が見つかりません。\n"
+            "  pip install coreai-opt\n"
+            "（企画メモの `coreai-optimization` はリポジトリ名で、PyPI 名は `coreai-opt`）\n"
+            f"元のエラー: {exc}"
+        ) from exc
+
+    config = QuantizerConfig(
+        global_config=ModuleQuantizerConfig(
+            op_state_spec={"weight": default_weight_quantization_spec()},
+            # "*": None で activation の量子化を明示的に切る。既定のままだと int8 になり、
+            # 校正していないぶん範囲が出鱈目になる。
+            op_input_spec={"*": None},
+            op_output_spec={"*": None},
+        )
     )
+
+    quantizer = Quantizer(module, config)
+    prepared = quantizer.prepare(sample)
+    with torch.no_grad():
+        return quantizer.finalize(prepared, backend=ExportBackend.CoreAI)
 
 
 def build_examples(pipe, batch: int) -> dict[str, tuple]:
@@ -181,6 +245,7 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
     # Swift 側が同じ式で ᾱ を組み立てられているか検証するための実測値
     betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=torch.float64) ** 2
     alphas_cumprod = torch.cumprod(1.0 - betas, dim=0)
+    timesteps_4step = lcm_timesteps(pipe)
 
     config = {
         "base_model": cfg.model.base_model,
@@ -204,10 +269,10 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
         "max_sequence_length": int(getattr(pipe.tokenizer, "model_max_length", 77)),
         "bos_token_id": int(pipe.tokenizer.bos_token_id),
         "eos_token_id": int(pipe.tokenizer.eos_token_id),
-        # Swift のテストが突き合わせる固定値
+        # Swift のテストが突き合わせる値。実スケジューラから導出する
         "verification": {
-            "timesteps_4step": LCM_4STEP_TIMESTEPS,
-            "alphas_cumprod_at": {str(t): float(alphas_cumprod[t]) for t in LCM_4STEP_TIMESTEPS},
+            "timesteps_4step": timesteps_4step,
+            "alphas_cumprod_at": {str(t): float(alphas_cumprod[t]) for t in timesteps_4step},
         },
     }
 

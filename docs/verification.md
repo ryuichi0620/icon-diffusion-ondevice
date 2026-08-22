@@ -63,7 +63,7 @@ Stage 3 → generate → Stage 4 → Stage 5 を実際に走らせる。**ネッ
 ```
    ✓ 01_w0.00_a-coffee-cup.png と 02_w1.00_a-coffee-cup.png で出力が変わる
    ✓ manifest: 4 枚, seed=[0, 1, 0, 1]
-   ✓ pipeline_config.json: latent=32 x2 -> image=64 (実測 64) timesteps=[999, 759, 519, 279]
+   ✓ pipeline_config.json: latent=32 x2 -> image=64 (実測 64) timesteps=[999, 759, 499, 259]
 ```
 
 **ここで確かめていること**:
@@ -72,7 +72,7 @@ Stage 3 → generate → Stage 4 → Stage 5 を実際に走らせる。**ネッ
 | --- | --- |
 | 重み 0.0 と 1.0 で出力が変わる | LoRA の重み設定が本当に効いている |
 | seed=[0, 1, 0, 1] | 同じ被写体の 2 枚が別の seed になっている |
-| timesteps=[999, 759, 519, 279] | LCM のタイムステップが diffusers と一致 |
+| timesteps=[999, 759, 499, 259] | LCM のタイムステップが diffusers と一致（値は diffusers に計算させて突き合わせている） |
 | image=64 (実測 64) | 設定が言うサイズと実際の生成サイズが一致 |
 
 **落ちたら**: 環境の問題。ライブラリのバージョン違いがほとんど。

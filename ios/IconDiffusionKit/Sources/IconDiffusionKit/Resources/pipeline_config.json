@@ -1,0 +1,37 @@
+{
+  "base_model": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+  "lcm_lora": "latent-consistency/lcm-lora-sdv1-5",
+  "trigger_word": "ICONST",
+  "prompt_template": "an icon in {trigger} style, {subject}, flat, minimal",
+  "num_train_timesteps": 1000,
+  "beta_start": 0.00085,
+  "beta_end": 0.012,
+  "beta_schedule": "scaled_linear",
+  "original_inference_steps": 50,
+  "timestep_scaling": 10.0,
+  "sigma_data": 0.5,
+  "vae_scaling_factor": 0.18215,
+  "vae_scaling_applied_in_model": true,
+  "latent_channels": 4,
+  "latent_size": 64,
+  "vae_scale_factor": 8,
+  "image_size": 512,
+  "text_embed_dim": 768,
+  "max_sequence_length": 77,
+  "bos_token_id": 49406,
+  "eos_token_id": 49407,
+  "verification": {
+    "timesteps_4step": [
+      999,
+      759,
+      499,
+      259
+    ],
+    "alphas_cumprod_at": {
+      "999": 0.004660098513077238,
+      "759": 0.05221292829431006,
+      "499": 0.27766965045646763,
+      "259": 0.658975526890813
+    }
+  }
+}

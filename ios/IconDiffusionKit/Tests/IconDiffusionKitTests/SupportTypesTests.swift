@@ -135,7 +135,7 @@ struct SupportTypesTests {
           "latent_channels": 4, "latent_size": 64, "image_size": 512,
           "text_embed_dim": 768, "max_sequence_length": 77,
           "bos_token_id": 49406, "eos_token_id": 49407,
-          "verification": { "timesteps_4step": [999, 759, 519, 279] }
+          "verification": { "timesteps_4step": [999, 759, 499, 259] }
         }
         """
         let configuration = try JSONDecoder().decode(
