@@ -60,7 +60,7 @@ struct ContentView: View {
     private func prewarm() async {
         #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
         do {
-            guard let root = Bundle.main.resourceURL?.appendingPathComponent("Resources") else { return }
+            guard let root = Bundle.main.resourceURL?.appendingPathComponent("Models") else { return }
             status = "モデルを準備中…"
             let started = Date()
             try await CoreAIBackend.prewarm(
@@ -111,7 +111,7 @@ struct ContentView: View {
         // .aimodel はディレクトリなので、バンドルにはフォルダ参照で入れている。
         // そのため直下ではなく Resources/ の下にある。bundled(in:) は
         // Bundle.url(forResource:) を使うのでサブフォルダを見てくれない。
-        guard let root = Bundle.main.resourceURL?.appendingPathComponent("Resources") else {
+        guard let root = Bundle.main.resourceURL?.appendingPathComponent("Models") else {
             throw IconDiffusionError.unsupportedDevice("バンドルのリソースが見つかりません")
         }
         let resources = PipelineResources.directory(root)

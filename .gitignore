@@ -38,8 +38,8 @@ ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources/merges.txt
 # xcodegen が project.yml から生成する。手で編集しないので追跡しない
 ios/IconDiffusionApp/IconDiffusionApp.xcodeproj/
 # Stage 5 の出力を sync-resources.sh がコピーしてくる。約 1GB
-ios/IconDiffusionApp/Resources/**
-!ios/IconDiffusionApp/Resources/.gitkeep
+ios/IconDiffusionApp/Models/**
+!ios/IconDiffusionApp/Models/.gitkeep
 build/
 DerivedData/
 .build/

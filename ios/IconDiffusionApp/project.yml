@@ -23,7 +23,9 @@ targets:
       - path: Sources
       # .aimodel はディレクトリなので folder 参照にする。中身をバラして
       # コピーされるとモデルとして読めなくなる。
-      - path: Resources
+      # バンドル直下に Resources/ を置くと codesign のリソース封印が混乱する
+      # （macOS の Contents/Resources と紛らわしい）。Models/ にしてある。
+      - path: Models
         type: folder
     dependencies:
       - package: IconDiffusionKit
@@ -32,6 +34,12 @@ targets:
         # CoreAIBackend.swift をビルド対象に入れる。これが無いとスタブのまま
         PRODUCT_BUNDLE_IDENTIFIER: com.egoshi.icondiffusion
         GENERATE_INFOPLIST_FILE: YES
+        # 実機インストール用。Ryuichi Egoshi 個人チーム（com.egoshi.* がこの名義）
+        DEVELOPMENT_TEAM: 5JD92NU25P
+        CODE_SIGN_STYLE: Automatic
+        # 端末は縦持ち前提。回転させても意味のある画面ではない
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_CFBundleDisplayName: Icon Diffusion
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: ICON_DIFFUSION_COREAI
         SWIFT_VERSION: "6.0"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

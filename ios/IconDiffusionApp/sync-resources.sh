@@ -13,7 +13,7 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VARIANT="${1:-coreai-int8}"
 MODELS="$REPO/training/outputs/$VARIANT"
 KIT_RES="$REPO/ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources"
-DEST="$SCRIPT_DIR/Resources"
+DEST="$SCRIPT_DIR/Models"
 
 for name in IconTextEncoder.aimodel IconUNet.aimodel IconVAEDecoder.aimodel; do
   if [[ ! -d "$MODELS/$name" ]]; then
