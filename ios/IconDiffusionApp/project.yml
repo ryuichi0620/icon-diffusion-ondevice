@@ -1,0 +1,39 @@
+# xcodegen の入力。project.pbxproj は生成物なのでリポジトリに入れない。
+#
+#   brew install xcodegen
+#   cd ios/IconDiffusionApp && ./sync-resources.sh && xcodegen && open IconDiffusionApp.xcodeproj
+#
+# Core AI は iOS 27 以降。Xcode 27 以降でないとビルドできない。
+name: IconDiffusionApp
+options:
+  bundleIdPrefix: com.egoshi
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+
+packages:
+  IconDiffusionKit:
+    path: ../IconDiffusionKit
+
+targets:
+  IconDiffusionApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # .aimodel はディレクトリなので folder 参照にする。中身をバラして
+      # コピーされるとモデルとして読めなくなる。
+      - path: Resources
+        type: folder
+    dependencies:
+      - package: IconDiffusionKit
+    settings:
+      base:
+        # CoreAIBackend.swift をビルド対象に入れる。これが無いとスタブのまま
+        PRODUCT_BUNDLE_IDENTIFIER: com.egoshi.icondiffusion
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: ICON_DIFFUSION_COREAI
+        SWIFT_VERSION: "6.0"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"

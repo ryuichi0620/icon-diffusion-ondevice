@@ -63,40 +63,46 @@ public actor CoreAIBackend: DiffusionBackend {
         let options = preferredComputeUnit.map { SpecializationOptions(preferredComputeUnitKind: $0) }
             ?? .default
 
-        func load(_ url: URL, _ label: String) async throws -> InferenceFunction {
-            let model: AIModel
-            do {
-                model = try await AIModel(contentsOf: url, options: options)
-            } catch {
-                throw IconDiffusionError.unsupportedDevice(
-                    "\(label) を読み込めませんでした: \(error.localizedDescription)"
-                )
-            }
-            // 変換時の entrypoint 名は "main" 固定（05_export_coreai.py）
-            guard let function = try model.loadFunction(named: "main") else {
-                throw IconDiffusionError.backendFailure(
-                    "\(label) に main がありません（あるのは \(model.functionNames)）"
-                )
-            }
-            return function
+        // ローカル関数にすると self を暗黙に捕まえたと見なされ、全プロパティの初期化前に
+        // self を使ったことになってビルドが通らない。static に出す。
+        self.textEncoder = try await Self.load(resources.textEncoderURL, "TextEncoder", options)
+        self.unet = try await Self.load(resources.unetURL, "UNet", options)
+        self.vaeDecoder = try await Self.load(resources.vaeDecoderURL, "VAEDecoder", options)
+
+        self.textEncoderIO = Self.names(configuration, "TextEncoder", DefaultIO.textEncoder)
+        self.unetIO = Self.names(configuration, "UNet", DefaultIO.unet)
+        self.vaeDecoderIO = Self.names(configuration, "VAEDecoder", DefaultIO.vaeDecoder)
+    }
+
+    private static func load(
+        _ url: URL, _ label: String, _ options: SpecializationOptions
+    ) async throws -> InferenceFunction {
+        let model: AIModel
+        do {
+            model = try await AIModel(contentsOf: url, options: options)
+        } catch {
+            throw IconDiffusionError.unsupportedDevice(
+                "\(label) を読み込めませんでした: \(error.localizedDescription)"
+            )
         }
-
-        self.textEncoder = try await load(resources.textEncoderURL, "TextEncoder")
-        self.unet = try await load(resources.unetURL, "UNet")
-        self.vaeDecoder = try await load(resources.vaeDecoderURL, "VAEDecoder")
-
-        func names(_ key: String, _ fallback: (inputs: [String], output: String))
-            -> (inputs: [String], output: String)
-        {
-            guard let spec = configuration.io?[key], let first = spec.outputs.first else {
-                return fallback
-            }
-            return (spec.inputs.map(\.name), first.name)
+        // 変換時の entrypoint 名は "main" 固定（05_export_coreai.py）
+        guard let function = try model.loadFunction(named: "main") else {
+            throw IconDiffusionError.backendFailure(
+                "\(label) に main がありません（あるのは \(model.functionNames)）"
+            )
         }
+        return function
+    }
 
-        self.textEncoderIO = names("TextEncoder", DefaultIO.textEncoder)
-        self.unetIO = names("UNet", DefaultIO.unet)
-        self.vaeDecoderIO = names("VAEDecoder", DefaultIO.vaeDecoder)
+    private static func names(
+        _ configuration: PipelineConfiguration,
+        _ key: String,
+        _ fallback: (inputs: [String], output: String)
+    ) -> (inputs: [String], output: String) {
+        guard let spec = configuration.io?[key], let first = spec.outputs.first else {
+            return fallback
+        }
+        return (spec.inputs.map(\.name), first.name)
     }
 
     // MARK: - DiffusionBackend

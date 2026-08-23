@@ -42,12 +42,18 @@ SWIFTC="$APP/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swif
 echo "[typecheck] Xcode: $APP"
 echo "[typecheck] SDK  : $(basename "$SDK")"
 
-"$SWIFTC" -typecheck \
+# **-typecheck では足りない。** 初期化前に self を使ったエラーを型チェックは見逃し、
+# 実ビルドで初めて出た。-c まで走らせて SIL/DI の検査を通す。
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+"$SWIFTC" -c -whole-module-optimization -o "$TMP/out.o" \
   -sdk "$SDK" \
   -target arm64-apple-ios27.0 \
   -DICON_DIFFUSION_COREAI \
   -swift-version 6 \
+  -module-name IconDiffusionKit \
   $(find "$SOURCES" -name "*.swift")
 
 echo "[typecheck] 通りました（CoreAIBackend.swift を含む）"
-echo "[typecheck] ただし通ったのは型チェックまで。実機で動かしたわけではない"
+echo "[typecheck] ただし通ったのはコンパイルまで。実機で動かしたわけではない"
