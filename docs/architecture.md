@@ -165,6 +165,23 @@ Mac 上で `.aimodel` を読んで推論でき、変換の正しさをここで�
 また歩留まり 70% が Core AI でも保たれるかは未確認（1 枚 4 分かかるので 192 枚の評価は
 この Mac では現実的でない）。
 
+## 5.5 モデルの入出力契約
+
+Swift 側が入出力を名前で引くための契約は **`pipeline_config.json` の `io` が唯一の情報源**。
+Swift にハードコードしない。
+
+| モデル | 入力 | 出力 |
+| --- | --- | --- |
+| TextEncoder | `input_ids` [1,77] int32 | `text_embeddings` [1,77,768] f32 |
+| UNet | `sample` [1,4,64,64] f32<br>`timestep` [1] **f32**<br>`encoder_hidden_states` [1,77,768] f32 | `noise_pred` [1,4,64,64] f32 |
+| VAEDecoder | `latent` [1,4,64,64] f32 | `image` [1,3,512,512] f32（値域 -1〜1） |
+
+**`timestep` は float32。** 整数で渡すとランタイムが弾く。
+
+**出力名は明示しないと自動生成名になる。** 何も指定しないと `convolution_97` のような
+グラフ内部の名前が付き、モデルが少し変わるだけで名前が変わる。Stage 5 は
+`add_exported_program(..., input_names=..., output_names=...)` で固定している。
+
 ## 6.5 タイムステップの取り違え（2026-08-23 に修正）
 
 **Swift 側だけが古い diffusers の挙動を実装していた。**

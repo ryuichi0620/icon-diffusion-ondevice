@@ -18,6 +18,31 @@
 //    - apple/coreai-models（パッケージの組み方の見本）
 //    - apple/ml-stable-diffusion（旧 Core ML 版。モデルの分け方と Swift ループの下敷き）
 //
+//  ---- 2026-08-23 に Python 側（coreai-core 1.0.0b2）で確認できたこと ----
+//
+//  Python ランタイムでは 3 モデルすべて実際に推論でき、PyTorch と数値が一致した。
+//  ただし **Python の API と Swift の API は別物**なので、下は「モデルの契約」であって
+//  「Swift の呼び出し方」ではない。Swift 側の API 名は依然として未検証。
+//
+//  モデルの入出力（名前・形・dtype）は Resources/pipeline_config.json の `io` に入っている。
+//  **ここにハードコードしないこと。** 変換側を変えたときに静かにズレる。
+//
+//    TextEncoder  in  input_ids             [1, 77]          int32
+//                 out text_embeddings       [1, 77, 768]     float32
+//    UNet         in  sample                [1, 4, 64, 64]   float32
+//                 in  timestep              [1]              float32  ★ int ではない
+//                 in  encoder_hidden_states [1, 77, 768]     float32
+//                 out noise_pred            [1, 4, 64, 64]   float32
+//    VAEDecoder   in  latent                [1, 4, 64, 64]   float32
+//                 out image                 [1, 3, 512, 512] float32（値域 -1〜1）
+//
+//  ★ timestep を整数で渡すとランタイムが弾く（Python 側で実際に踏んだ）。
+//
+//  Python 側で踏んだ落とし穴（Swift でも似た形で出るかもしれない）:
+//    - 出力名は明示しないとグラフ内部の自動生成名（convolution_97 等）になる。
+//      Stage 5 で input_names / output_names を明示的に渡して固定してある
+//    - モデルの読み込みも推論も非同期だった
+//
 //  API がこちらの想定とずれていても、直すのはこのファイルだけで済むようにしてある。
 //  DiffusionBackend さえ満たせば、パイプラインもスケジューラも変更不要。
 //

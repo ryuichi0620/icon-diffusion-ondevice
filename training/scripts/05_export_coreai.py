@@ -52,7 +52,18 @@ def lcm_timesteps(pipe, steps: int = LCM_VERIFICATION_STEPS) -> list[int]:
     return [int(t) for t in scheduler.timesteps]
 
 
-def export_module(module, sample: tuple, out_path: Path, quantize: str) -> None:
+# Swift 側が入出力を名前で引くための契約。**必ず明示的に渡すこと。**
+# 省略すると出力名がグラフ内部の自動生成名（convolution_97 など）になり、
+# モデルが少し変わるだけで名前が変わって Swift 側が静かに壊れる。
+IO_NAMES = {
+    "TextEncoder": (["input_ids"], ["text_embeddings"]),
+    "UNet": (["sample", "timestep", "encoder_hidden_states"], ["noise_pred"]),
+    "VAEDecoder": (["latent"], ["image"]),
+}
+
+
+def export_module(module, sample: tuple, out_path: Path, quantize: str,
+                  io_names: tuple[list[str], list[str]] | None = None) -> None:
     """PyTorch モジュールを 1 つ Core AI 形式に変換して保存する。
 
     2026-08-22 に coreai-torch 0.4.1 / coreai-core 1.0.0b2 の実物に対して検証済み。
@@ -79,7 +90,13 @@ def export_module(module, sample: tuple, out_path: Path, quantize: str) -> None:
         module = _quantize_module(module, sample, quantize)
 
     exported = torch.export.export(module, args=sample).run_decompositions(get_decomp_table())
-    program = TorchConverter().add_exported_program(exported).to_coreai()
+    converter = TorchConverter()
+    if io_names is None:
+        converter.add_exported_program(exported)
+    else:
+        input_names, output_names = io_names
+        converter.add_exported_program(exported, input_names=input_names, output_names=output_names)
+    program = converter.to_coreai()
 
     program.optimize()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,6 +264,12 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
     alphas_cumprod = torch.cumprod(1.0 - betas, dim=0)
     timesteps_4step = lcm_timesteps(pipe)
 
+    # io セクションと下の平場の両方から参照するので、先に確定させる
+    latent_channels = int(getattr(unet_config, "in_channels", 4))
+    image_size = latent_size * vae_scale_factor
+    text_embed_dim = int(pipe.text_encoder.config.hidden_size)
+    max_sequence_length = int(getattr(pipe.tokenizer, "model_max_length", 77))
+
     config = {
         "base_model": cfg.model.base_model,
         "lcm_lora": cfg.model.lcm_lora,
@@ -261,14 +284,44 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
         "sigma_data": 0.5,  # diffusers の LCMScheduler では config ではなくハードコード
         "vae_scaling_factor": float(pipe.vae.config.scaling_factor),
         "vae_scaling_applied_in_model": True,
-        "latent_channels": int(getattr(unet_config, "in_channels", 4)),
+        "latent_channels": latent_channels,
         "latent_size": latent_size,
         "vae_scale_factor": vae_scale_factor,
-        "image_size": latent_size * vae_scale_factor,
-        "text_embed_dim": int(pipe.text_encoder.config.hidden_size),
-        "max_sequence_length": int(getattr(pipe.tokenizer, "model_max_length", 77)),
+        "image_size": image_size,
+        "text_embed_dim": text_embed_dim,
+        "max_sequence_length": max_sequence_length,
         "bos_token_id": int(pipe.tokenizer.bos_token_id),
         "eos_token_id": int(pipe.tokenizer.eos_token_id),
+        # Swift 側が入出力を名前で引くための契約。**ここを唯一の情報源にする。**
+        # Swift にハードコードすると、変換側を変えたときに静かに壊れる。
+        # timestep が float32 の [1] である点に注意（int で渡すとランタイムが拒否する）。
+        "io": {
+            "TextEncoder": {
+                "inputs": [{"name": "input_ids",
+                            "shape": [1, max_sequence_length], "dtype": "int32"}],
+                "outputs": [{"name": "text_embeddings",
+                             "shape": [1, max_sequence_length, text_embed_dim], "dtype": "float32"}],
+            },
+            "UNet": {
+                "inputs": [
+                    {"name": "sample",
+                     "shape": [1, latent_channels, latent_size, latent_size], "dtype": "float32"},
+                    {"name": "timestep", "shape": [1], "dtype": "float32"},
+                    {"name": "encoder_hidden_states",
+                     "shape": [1, max_sequence_length, text_embed_dim], "dtype": "float32"},
+                ],
+                "outputs": [{"name": "noise_pred",
+                             "shape": [1, latent_channels, latent_size, latent_size],
+                             "dtype": "float32"}],
+            },
+            "VAEDecoder": {
+                "inputs": [{"name": "latent",
+                            "shape": [1, latent_channels, latent_size, latent_size],
+                            "dtype": "float32"}],
+                "outputs": [{"name": "image",
+                             "shape": [1, 3, image_size, image_size], "dtype": "float32"}],
+            },
+        },
         # Swift のテストが突き合わせる値。実スケジューラから導出する
         "verification": {
             "timesteps_4step": timesteps_4step,
@@ -354,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         out_path = output_dir / f"Icon{name}.aimodel"
         print(f"[stage5] 変換中: {name} -> {out_path.name}")
         with torch.no_grad():
-            export_module(module, examples[name], out_path, quantize)
+            export_module(module, examples[name], out_path, quantize, IO_NAMES.get(name))
         print(f"[stage5]   完了: {out_path}")
 
     print(f"[stage5] 3 モデル出力 -> {output_dir}")
