@@ -208,6 +208,50 @@ diffusers は途中でタイムステップの選び方を変えている。旧�
 実際に計算させた値と突き合わせる。期待値は `training/scripts/gen_scheduler_fixture.py`
 で再生成できるようにし、`--check` でずれを検出できるようにした。
 
+## 6.6 Core AI の Swift API（2026-08-23 に実物で検証）
+
+**Core AI は iOS 27 / macOS 27 以降。** iOS 26 SDK に `CoreAI.framework` は無い。
+ビルドには Xcode 27 以降が要る。`.aimodel` も `OSVersion.v27` 向けに書き出される。
+
+iOS 27.0 SDK に対して型チェックを通して確認した実際の呼び出し方。
+
+```swift
+let options = SpecializationOptions(preferredComputeUnitKind: .neuralEngine)  // 省略可
+let model = try await AIModel(contentsOf: url, options: options)
+guard let fn = try model.loadFunction(named: "main") else { … }
+
+let input = NDArray(scalars: values, shape: shape)
+var outputs = try await fn.run(inputs: ["latent": input])
+
+guard let value = outputs.remove("image"), let nd = value.ndArray else { … }
+let scalars = nd.view(as: Float.self).withUnsafePointer { p, _, _ in
+    Array(UnsafeBufferPointer(start: p, count: nd.shape.reduce(1, *)))
+}
+```
+
+### 当初の推測とどう違ったか
+
+| 項目 | 企画メモの推測 | 実物 |
+| --- | --- | --- |
+| 読み込み | `AIModel(contentsOf:)` | ✅ 正しい（`options:` 既定付き） |
+| 関数の取得 | （無し） | **`model.loadFunction(named: "main")`** が要る |
+| 推論 | `model.prediction(from:)` | **`fn.run(inputs: [String: NDArray])`** |
+| 入力生成 | `NDArray(shape:values:)` | **`NDArray(scalars:shape:)`** |
+| 出力取得 | `outputs.values.first` | **`outputs.remove(name) -> InferenceValue?`** |
+| 値の読み出し | `array.scalars(of:)` | **`nd.view(as:).withUnsafePointer`** |
+
+ほかに使えるもの:
+
+- **`AIModel.specialize(contentsOf:options:cache:cachePolicy:)`** — コンパイル結果を
+  キャッシュする。端末で毎回コンパイルさせないために要る
+- **`ComputeUnitKind.availableKinds`** — 実行できる計算ユニットの確認
+
+### 検証の限界
+
+**通ったのは型チェックまで。実機では動かしていない。**
+`./ios/typecheck-coreai.sh` で再現できる。`swift test` では `CoreAIBackend.swift` は
+ビルド対象外なので、これを別に通さないと壊れても気づけない。
+
 ## 7. 非対応端末
 
 Core AI は Apple Intelligence 対応機が前提。`IconDiffusionPipeline` の初期化を失敗させて

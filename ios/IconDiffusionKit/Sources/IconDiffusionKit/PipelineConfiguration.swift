@@ -30,6 +30,36 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
     public var bosTokenID: Int
     public var eosTokenID: Int
 
+    /// 各モデルの入出力の名前・形・dtype。`pipeline_config.json` の `io` から来る。
+    ///
+    /// **Swift 側で名前をハードコードしないためにある。** 変換側（`05_export_coreai.py`）が
+    /// `add_exported_program` に渡す名前と 1 対 1 で対応しており、そこを変えたら
+    /// ここも自動で変わる。無ければ nil で、backend は既知の契約にフォールバックする。
+    public var io: [String: ModelIO]?
+
+    /// 1 モデルぶんの入出力仕様。
+    public struct ModelIO: Codable, Sendable, Equatable {
+        public struct TensorSpec: Codable, Sendable, Equatable {
+            public var name: String
+            public var shape: [Int]
+            public var dtype: String
+
+            public init(name: String, shape: [Int], dtype: String) {
+                self.name = name
+                self.shape = shape
+                self.dtype = dtype
+            }
+        }
+
+        public var inputs: [TensorSpec]
+        public var outputs: [TensorSpec]
+
+        public init(inputs: [TensorSpec], outputs: [TensorSpec]) {
+            self.inputs = inputs
+            self.outputs = outputs
+        }
+    }
+
     public init(
         baseModel: String,
         triggerWord: String,
@@ -49,7 +79,8 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
         textEmbedDim: Int,
         maxSequenceLength: Int,
         bosTokenID: Int,
-        eosTokenID: Int
+        eosTokenID: Int,
+        io: [String: ModelIO]? = nil
     ) {
         self.baseModel = baseModel
         self.triggerWord = triggerWord
@@ -70,6 +101,7 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
         self.maxSequenceLength = maxSequenceLength
         self.bosTokenID = bosTokenID
         self.eosTokenID = eosTokenID
+        self.io = io
     }
 
     enum CodingKeys: String, CodingKey {
@@ -92,6 +124,7 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
         case maxSequenceLength = "max_sequence_length"
         case bosTokenID = "bos_token_id"
         case eosTokenID = "eos_token_id"
+        case io
     }
 
     /// SD1.5 の既定値。`pipeline_config.json` が無い場面（テストや疎通確認）で使う。

@@ -3,48 +3,28 @@
 //
 //  ★ このファイルだけが Core AI に依存する。ほかはすべて純 Swift。
 //
-//  既定ではビルド対象から外してある。中身が WWDC26 の実 API に対して**未検証**だからで、
-//  推測で書いたコードが既定で混ざるとビルドが通らない・静かにズレる、のどちらかになる。
-//
-//  有効にするには Package.swift のターゲットに定義を足す:
+//  既定ではビルド対象から外してある。有効にするには Package.swift のターゲットに
+//  定義を足す:
 //
 //      .target(
 //          name: "IconDiffusionKit",
 //          swiftSettings: [.define("ICON_DIFFUSION_COREAI")]
 //      )
 //
-//  有効にする前に、下の TODO(core-ai) を実物と突き合わせること:
-//    - WWDC26「Meet Core AI」(324) / 「Dive into Core AI model authoring and optimization」(325)
-//    - apple/coreai-models（パッケージの組み方の見本）
-//    - apple/ml-stable-diffusion（旧 Core ML 版。モデルの分け方と Swift ループの下敷き）
+//  **Core AI は iOS 27 / macOS 27 以降。** iOS 26 SDK には CoreAI.framework が無い。
+//  ビルドには Xcode 27 以降が要る。
 //
-//  ---- 2026-08-23 に Python 側（coreai-core 1.0.0b2）で確認できたこと ----
+//  ---- API の検証状況（2026-08-23）----
 //
-//  Python ランタイムでは 3 モデルすべて実際に推論でき、PyTorch と数値が一致した。
-//  ただし **Python の API と Swift の API は別物**なので、下は「モデルの契約」であって
-//  「Swift の呼び出し方」ではない。Swift 側の API 名は依然として未検証。
+//  iOS 27.0 SDK の CoreAI モジュールに対して、下の呼び出しがすべて
+//  型チェックを通ることを確認済み。**推測で書いた箇所はもう無い。**
+//  ただし「コンパイルが通る」までで、**実機で動かしてはいない。**
 //
-//  モデルの入出力（名前・形・dtype）は Resources/pipeline_config.json の `io` に入っている。
-//  **ここにハードコードしないこと。** 変換側を変えたときに静かにズレる。
+//  検証に使った SDK:
+//    Xcode 27.0 beta / iPhoneOS27.0.sdk / CoreAI（CoreAIRuntime + CoreAIDelegates の再エクスポート）
 //
-//    TextEncoder  in  input_ids             [1, 77]          int32
-//                 out text_embeddings       [1, 77, 768]     float32
-//    UNet         in  sample                [1, 4, 64, 64]   float32
-//                 in  timestep              [1]              float32  ★ int ではない
-//                 in  encoder_hidden_states [1, 77, 768]     float32
-//                 out noise_pred            [1, 4, 64, 64]   float32
-//    VAEDecoder   in  latent                [1, 4, 64, 64]   float32
-//                 out image                 [1, 3, 512, 512] float32（値域 -1〜1）
-//
-//  ★ timestep を整数で渡すとランタイムが弾く（Python 側で実際に踏んだ）。
-//
-//  Python 側で踏んだ落とし穴（Swift でも似た形で出るかもしれない）:
-//    - 出力名は明示しないとグラフ内部の自動生成名（convolution_97 等）になる。
-//      Stage 5 で input_names / output_names を明示的に渡して固定してある
-//    - モデルの読み込みも推論も非同期だった
-//
-//  API がこちらの想定とずれていても、直すのはこのファイルだけで済むようにしてある。
-//  DiffusionBackend さえ満たせば、パイプラインもスケジューラも変更不要。
+//  モデルの入出力名は `Resources/pipeline_config.json` の `io` から取る。
+//  ここにハードコードしない。変換側（05_export_coreai.py）を変えたら自動で追随する。
 //
 
 #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
@@ -52,35 +32,85 @@
 import CoreAI
 import Foundation
 
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 27.0, macOS 27.0, *)
 public actor CoreAIBackend: DiffusionBackend {
-    private let configuration: PipelineConfiguration
-    private let textEncoder: AIModel     // TODO(core-ai): 型名を実物に合わせる
-    private let unet: AIModel
-    private let vaeDecoder: AIModel
+    /// 変換側と揃えた既定の入出力名。`pipeline_config.json` に `io` が無いときだけ使う。
+    private enum DefaultIO {
+        static let textEncoder = (inputs: ["input_ids"], output: "text_embeddings")
+        static let unet = (inputs: ["sample", "timestep", "encoder_hidden_states"], output: "noise_pred")
+        static let vaeDecoder = (inputs: ["latent"], output: "image")
+    }
 
-    public init(resources: PipelineResources, configuration: PipelineConfiguration) async throws {
+    private let configuration: PipelineConfiguration
+    private let textEncoder: InferenceFunction
+    private let unet: InferenceFunction
+    private let vaeDecoder: InferenceFunction
+
+    private let textEncoderIO: (inputs: [String], output: String)
+    private let unetIO: (inputs: [String], output: String)
+    private let vaeDecoderIO: (inputs: [String], output: String)
+
+    /// - Parameter preferredComputeUnit: 省略すると Core AI に任せる。
+    ///   `.neuralEngine` を指定すると ANE を優先する（`ComputeUnitKind.availableKinds` で確認できる）。
+    public init(
+        resources: PipelineResources,
+        configuration: PipelineConfiguration,
+        preferredComputeUnit: ComputeUnitKind? = nil
+    ) async throws {
         try resources.validateModels()
         self.configuration = configuration
-        do {
-            // TODO(core-ai): 読み込み API を実物に合わせる。
-            // 計算ユニットの指定（ANE 優先など）もここで行う想定。
-            self.textEncoder = try await AIModel(contentsOf: resources.textEncoderURL)
-            self.unet = try await AIModel(contentsOf: resources.unetURL)
-            self.vaeDecoder = try await AIModel(contentsOf: resources.vaeDecoderURL)
-        } catch {
-            throw IconDiffusionError.unsupportedDevice(
-                "Core AI のモデルを読み込めませんでした: \(error.localizedDescription)"
-            )
+
+        let options = preferredComputeUnit.map { SpecializationOptions(preferredComputeUnitKind: $0) }
+            ?? .default
+
+        func load(_ url: URL, _ label: String) async throws -> InferenceFunction {
+            let model: AIModel
+            do {
+                model = try await AIModel(contentsOf: url, options: options)
+            } catch {
+                throw IconDiffusionError.unsupportedDevice(
+                    "\(label) を読み込めませんでした: \(error.localizedDescription)"
+                )
+            }
+            // 変換時の entrypoint 名は "main" 固定（05_export_coreai.py）
+            guard let function = try model.loadFunction(named: "main") else {
+                throw IconDiffusionError.backendFailure(
+                    "\(label) に main がありません（あるのは \(model.functionNames)）"
+                )
+            }
+            return function
         }
+
+        self.textEncoder = try await load(resources.textEncoderURL, "TextEncoder")
+        self.unet = try await load(resources.unetURL, "UNet")
+        self.vaeDecoder = try await load(resources.vaeDecoderURL, "VAEDecoder")
+
+        func names(_ key: String, _ fallback: (inputs: [String], output: String))
+            -> (inputs: [String], output: String)
+        {
+            guard let spec = configuration.io?[key], let first = spec.outputs.first else {
+                return fallback
+            }
+            return (spec.inputs.map(\.name), first.name)
+        }
+
+        self.textEncoderIO = names("TextEncoder", DefaultIO.textEncoder)
+        self.unetIO = names("UNet", DefaultIO.unet)
+        self.vaeDecoderIO = names("VAEDecoder", DefaultIO.vaeDecoder)
     }
 
     // MARK: - DiffusionBackend
 
     public func encodeText(inputIDs: [Int32]) async throws -> Tensor {
-        let input = try makeNDArray(values: inputIDs.map(Float.init), shape: [1, inputIDs.count])
-        let output = try await run(textEncoder, inputs: ["input_ids": input])
-        return try makeTensor(output, expecting: configuration.textEmbeddingShape, context: "encodeText")
+        // input_ids は int32。Float に丸めて渡すと語彙 ID がずれる
+        let ids = NDArray(scalars: inputIDs, shape: [1, inputIDs.count])
+        return try await run(
+            textEncoder,
+            inputs: [textEncoderIO.inputs[0]: ids],
+            output: textEncoderIO.output,
+            expecting: configuration.textEmbeddingShape,
+            context: "encodeText"
+        )
     }
 
     public func predictNoise(
@@ -88,57 +118,67 @@ public actor CoreAIBackend: DiffusionBackend {
         timestep: Float,
         encoderHiddenStates: Tensor
     ) async throws -> Tensor {
-        let output = try await run(unet, inputs: [
-            "sample": try makeNDArray(values: sample.values, shape: sample.shape),
-            "timestep": try makeNDArray(values: [timestep], shape: [1]),
-            "encoder_hidden_states": try makeNDArray(
-                values: encoderHiddenStates.values, shape: encoderHiddenStates.shape
-            ),
-        ])
-        return try makeTensor(output, expecting: sample.shape, context: "predictNoise")
+        // timestep は float32 の [1]。整数で渡すとランタイムが弾く
+        let inputs = [
+            unetIO.inputs[0]: NDArray(scalars: sample.values, shape: sample.shape),
+            unetIO.inputs[1]: NDArray(scalars: [timestep], shape: [1]),
+            unetIO.inputs[2]: NDArray(scalars: encoderHiddenStates.values,
+                                      shape: encoderHiddenStates.shape),
+        ]
+        return try await run(
+            unet, inputs: inputs, output: unetIO.output,
+            expecting: sample.shape, context: "predictNoise"
+        )
     }
 
     public func decodeLatent(_ latent: Tensor) async throws -> Tensor {
-        let output = try await run(
+        return try await run(
             vaeDecoder,
-            inputs: ["latent": try makeNDArray(values: latent.values, shape: latent.shape)]
+            inputs: [vaeDecoderIO.inputs[0]: NDArray(scalars: latent.values, shape: latent.shape)],
+            output: vaeDecoderIO.output,
+            expecting: configuration.decodedImageShape,
+            context: "decodeLatent"
         )
-        return try makeTensor(output, expecting: configuration.decodedImageShape, context: "decodeLatent")
     }
 
     // MARK: - Core AI との受け渡し
 
-    /// TODO(core-ai): 推論の呼び出し方と、出力の取り出し方を実物に合わせる。
-    /// 入力名（"sample" / "timestep" / "encoder_hidden_states" 等）は
-    /// `05_export_coreai.py` のラッパーの引数名に対応する。Xcode のモデルビューアで実際の名前を確認すること。
-    private func run(_ model: AIModel, inputs: [String: NDArray]) async throws -> NDArray {
+    private func run(
+        _ function: InferenceFunction,
+        inputs: [String: NDArray],
+        output name: String,
+        expecting shape: [Int],
+        context: String
+    ) async throws -> Tensor {
+        var outputs: InferenceFunction.Outputs
         do {
-            let outputs = try await model.prediction(from: inputs)
-            guard let first = outputs.values.first else {
-                throw IconDiffusionError.backendFailure("モデルが出力を返しませんでした")
-            }
-            return first
-        } catch let error as IconDiffusionError {
-            throw error
+            outputs = try await function.run(inputs: inputs)
         } catch {
-            throw IconDiffusionError.backendFailure(error.localizedDescription)
+            throw IconDiffusionError.backendFailure("\(context): \(error.localizedDescription)")
         }
+
+        guard let value = outputs.remove(name) else {
+            throw IconDiffusionError.backendFailure(
+                "\(context): 出力 \(name) がありません（あるのは \(Array(outputs.names))）"
+            )
+        }
+        guard let array = value.ndArray else {
+            throw IconDiffusionError.backendFailure("\(context): 出力 \(name) が NDArray ではありません")
+        }
+        // 形の検証はここで必ず行う。ズレたまま先に進むと、絵が壊れる形でしか気づけない
+        guard array.shape == shape else {
+            throw IconDiffusionError.backendFailure(
+                "\(context): 出力の形が違います。期待 \(shape) / 実際 \(array.shape)"
+            )
+        }
+        return try Tensor(shape: shape, values: scalars(of: array), context: "CoreAIBackend.\(context)")
     }
 
-    /// TODO(core-ai): NDArray の生成方法を実物に合わせる。
-    private func makeNDArray(values: [Float], shape: [Int]) throws -> NDArray {
-        do {
-            return try NDArray(shape: shape, values: values)
-        } catch {
-            throw IconDiffusionError.backendFailure("NDArray を作れませんでした: \(error.localizedDescription)")
+    private func scalars(of array: NDArray) -> [Float] {
+        let count = array.shape.reduce(1, *)
+        return array.view(as: Float.self).withUnsafePointer { pointer, _, _ in
+            Array(UnsafeBufferPointer(start: pointer, count: count))
         }
-    }
-
-    /// TODO(core-ai): NDArray から要素を取り出す方法を実物に合わせる。
-    /// 形の検証だけはここで必ず行う。ズレたまま先に進むと、絵が壊れる形でしか気づけない。
-    private func makeTensor(_ array: NDArray, expecting shape: [Int], context: String) throws -> Tensor {
-        let values = array.scalars(of: Float.self)
-        return try Tensor(shape: shape, values: values, context: "CoreAIBackend.\(context)")
     }
 }
 
