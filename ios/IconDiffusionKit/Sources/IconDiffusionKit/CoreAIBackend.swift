@@ -77,14 +77,7 @@ public actor CoreAIBackend: DiffusionBackend {
     private static func load(
         _ url: URL, _ label: String, _ options: SpecializationOptions
     ) async throws -> InferenceFunction {
-        let model: AIModel
-        do {
-            model = try await AIModel(contentsOf: url, options: options)
-        } catch {
-            throw IconDiffusionError.unsupportedDevice(
-                "\(label) を読み込めませんでした: \(error.localizedDescription)"
-            )
-        }
+        let model = try await loadModel(url, label, options)
         // 変換時の entrypoint 名は "main" 固定（05_export_coreai.py）
         guard let function = try model.loadFunction(named: "main") else {
             throw IconDiffusionError.backendFailure(
@@ -92,6 +85,55 @@ public actor CoreAIBackend: DiffusionBackend {
             )
         }
         return function
+    }
+
+    /// `.aimodel` は端末向けにコンパイルしてから動く。**そのコンパイルが重い。**
+    /// 毎回やらせないよう、まずキャッシュを見て、無ければ specialize して保存する。
+    ///
+    /// 破棄条件は既定のまま（ストレージ逼迫時と、元の `.aimodel` が変わった / 消えたとき）。
+    /// 後者があるので、モデルを作り直したときに古いコンパイル結果を掴む事故は起きない。
+    private static func loadModel(
+        _ url: URL, _ label: String, _ options: SpecializationOptions
+    ) async throws -> AIModel {
+        // キャッシュが壊れていても致命的ではない。コンパイルし直せば済む
+        if let cached = try? AIModelCache.default.model(for: url, options: options) {
+            return cached
+        }
+        do {
+            return try await AIModel.specialize(
+                contentsOf: url, options: options, cache: .default, cachePolicy: .default
+            )
+        } catch {
+            throw IconDiffusionError.unsupportedDevice(
+                "\(label) を読み込めませんでした: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// 3 モデルをコンパイルしてキャッシュに入れておく。
+    ///
+    /// **生成ボタンを押してから待たせないために使う。** アプリの起動直後や
+    /// オンボーディングで呼んでおけば、以後の `init` はキャッシュから読むだけになる。
+    /// 既にキャッシュ済みなら何もしない。
+    ///
+    /// - Parameter onProgress: (完了したモデル数, 全体数)。UI の進捗表示用。
+    public static func prewarm(
+        resources: PipelineResources,
+        preferredComputeUnit: ComputeUnitKind? = nil,
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws {
+        try resources.validateModels()
+        let options = preferredComputeUnit.map { SpecializationOptions(preferredComputeUnitKind: $0) }
+            ?? .default
+        let targets = [
+            (resources.textEncoderURL, "TextEncoder"),
+            (resources.unetURL, "UNet"),
+            (resources.vaeDecoderURL, "VAEDecoder"),
+        ]
+        for (index, target) in targets.enumerated() {
+            _ = try await loadModel(target.0, target.1, options)
+            onProgress?(index + 1, targets.count)
+        }
     }
 
     private static func names(

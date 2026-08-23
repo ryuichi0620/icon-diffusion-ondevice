@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var status = ""
     @State private var isBusy = false
     @State private var pipeline: IconDiffusionPipeline?
+    @State private var didPrewarm = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -47,6 +48,35 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
+        // モデルのコンパイルは重い。生成ボタンを押してから待たせず、
+        // 画面が出た時点で済ませておく。2 回目以降はキャッシュから読むだけ。
+        .task {
+            guard !didPrewarm else { return }
+            didPrewarm = true
+            await prewarm()
+        }
+    }
+
+    private func prewarm() async {
+        #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
+        do {
+            guard let root = Bundle.main.resourceURL?.appendingPathComponent("Resources") else { return }
+            status = "モデルを準備中…"
+            let started = Date()
+            try await CoreAIBackend.prewarm(
+                resources: PipelineResources.directory(root),
+                preferredComputeUnit: .neuralEngine,
+                onProgress: { done, total in
+                    Task { @MainActor in status = "モデルを準備中… \(done)/\(total)" }
+                }
+            )
+            status = String(format: "準備完了 %.1f 秒", Date().timeIntervalSince(started))
+        } catch {
+            status = "準備に失敗: \(error.localizedDescription)"
+        }
+        #else
+        status = "Core AI が使えません（シミュレータでは動きません）"
+        #endif
     }
 
     private func generate() async {

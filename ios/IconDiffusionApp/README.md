@@ -52,6 +52,7 @@ xcodebuild -project IconDiffusionApp.xcodeproj -scheme IconDiffusionApp \
 - そのため直下ではなく `Resources/` の下に入る。`PipelineResources.bundled(in:)` は
   `Bundle.url(forResource:)` を使うのでサブフォルダを見てくれない。
   アプリ側は `PipelineResources.directory(_:)` を使っている
-- **モデルの読み込みは重い**（コンパイルが走る）。生成のたびにやらず一度だけ。
-  端末で毎回コンパイルさせないためには `AIModel.specialize` のキャッシュを使う
-  （`docs/architecture.md` 6.6 節）。このアプリはまだ使っていない
+- **モデルの読み込みは重い**（コンパイルが走る）。`CoreAIBackend` は
+  `AIModel.specialize` のキャッシュを使うので、コンパイルは初回だけ。
+  アプリは画面が出た時点で `CoreAIBackend.prewarm` を呼び、生成ボタンを
+  押してから待たせないようにしている（`docs/architecture.md` 6.6 節）

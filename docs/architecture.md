@@ -242,9 +242,30 @@ let scalars = nd.view(as: Float.self).withUnsafePointer { p, _, _ in
 
 ほかに使えるもの:
 
-- **`AIModel.specialize(contentsOf:options:cache:cachePolicy:)`** — コンパイル結果を
-  キャッシュする。端末で毎回コンパイルさせないために要る
 - **`ComputeUnitKind.availableKinds`** — 実行できる計算ユニットの確認
+
+### コンパイル結果のキャッシュ
+
+`.aimodel` は端末向けにコンパイルしてから動く。**そのコンパイルが重い。**
+Mac の Python 側で VAEDecoder 1 回に 100 秒かかったことを思うと、端末でも無視できない。
+
+`CoreAIBackend` はまずキャッシュを見て、無ければ `specialize` して保存する。
+
+```swift
+if let cached = try? AIModelCache.default.model(for: url, options: options) {
+    return cached
+}
+return try await AIModel.specialize(
+    contentsOf: url, options: options, cache: .default, cachePolicy: .default
+)
+```
+
+破棄条件は既定のまま。**ストレージ逼迫時**と、**元の `.aimodel` が変わった / 消えたとき**に
+破棄される。後者があるので、モデルを作り直したときに古いコンパイル結果を掴む事故は起きない。
+
+`CoreAIBackend.prewarm(resources:preferredComputeUnit:onProgress:)` で 3 モデルを
+まとめて先に済ませられる。**生成ボタンを押してから待たせないため**にあり、
+アプリは画面が出た時点で呼ぶ。2 回目以降はキャッシュから読むだけになる。
 
 ### 検証の限界
 
