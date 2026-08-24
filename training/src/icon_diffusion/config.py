@@ -100,6 +100,9 @@ class ExportConfig:
     output_dir: Path
     swift_resources_dir: Path
     quantize: str = "int8"
+    # 量子化から外すモジュール名。「全部 int8」が通らないことが実機で分かったので
+    # モジュール単位で切れるようにしてある。理由は docs/architecture.md の 6.7 節。
+    quantize_skip: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,6 +184,7 @@ def load_config(path: str | Path | None = None) -> Config:
                 )
             ),
             quantize=str(export_raw.get("quantize", "int8")),
+            quantize_skip=tuple(str(x) for x in export_raw.get("quantize_skip", ())),
         ),
     )
 

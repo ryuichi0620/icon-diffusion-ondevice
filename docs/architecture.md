@@ -307,9 +307,71 @@ return try await AIModel.specialize(
 
 ### 検証の限界
 
-**通ったのは型チェックまで。実機では動かしていない。**
-`./ios/typecheck-coreai.sh` で再現できる。`swift test` では `CoreAIBackend.swift` は
-ビルド対象外なので、これを別に通さないと壊れても気づけない。
+型チェックは `./ios/typecheck-coreai.sh` で再現できる。`swift test` では
+`CoreAIBackend.swift` はビルド対象外なので、これを別に通さないと壊れても気づけない。
+
+**2026-08-24 に実機（iPhone・iOS 27）で通しで動作を確認した。** 到達点は 6.7 節。
+
+## 6.7 実機で絵が壊れた 2 つの原因（2026-08-24）
+
+変換も型チェックも通り、4 ステップも回り切るのに、出てくる絵が灰色の帯だった。
+原因は 2 つあり、**どちらも「変換は成功しているのに値が化ける」**という形で出た。
+形の検証（`requireShape`）では検出できない種類の壊れ方なので、各段の値の統計を
+出して Python 側と突き合わせて特定した（`ICON_DEBUG=1`）。
+
+### 原因 1: int8 量子化が CLIP の TextEncoder を壊す
+
+    TextEncoder 出力    fp32:  [-28.05, 33.09]
+                        int8:  [-14.20,  6.77]   ← 振幅が半分以下に潰れる
+
+CLIP の埋め込みは一部の次元に極端な外れ値を持つ。per-channel 対称 int8 でも
+その範囲を表現しきれず、全体が潰れる。潰れた埋め込みは UNet の 4 ステップすべてに
+効くので、最終的に VAE の出力が [-1, 1] を大きく外れて飽和する。
+
+**対処: TextEncoder だけ量子化から外す**（`configs/icon_lora.toml` の
+`export.quantize_skip`）。118MB → 235MB と増えるが、UNet（821MB）に比べれば小さい。
+UNet と VAEDecoder は int8 のままで問題ない（相対誤差 0.34% / 1.45%）。
+
+### 原因 2: VAEDecoder は ANE 上でだけ壊れる
+
+    decodeLatent 出力   ANE:  [-13.27, 26.59]   ← 発散
+                        GPU:  [ -0.85,  1.13]
+                        Python 参照:  [-0.78, 1.09]
+
+**モデルは正しい。** 実機に載せているのと同じ `.aimodel` を Mac の Core AI ランタイムで
+実行すると fp32 の PyTorch に対して相対誤差 1.45% で一致する（`coreai.runtime.AIModel`）。
+壊れるのは ANE で実行したときだけ。Mac 側では `SpecializationOptions` に
+`neural_engine` を指定しても値が変わらなかったので、**この現象は Mac では再現できない**。
+
+**対処: VAEDecoder だけ GPU で動かす**（`CoreAIBackend.ComputeUnitPlan.recommended`）。
+全体を GPU に落とせば直るが、4 ステップ回る UNet まで巻き添えになる。UNet は ANE で
+参照と一致しているので、VAE だけ逃がす。VAE は 1 回しか回らないので全体時間への影響は小さい。
+
+TODO(core-ai): ANE で何が起きているかは未解明。fp16 のオーバーフローなら NaN/Inf が
+出るはずだが出ていない（統計に NaN/Inf の検出を入れてある）。ANE 側の中間精度か、
+特定の op の扱いの違いと思われる。Core AI の正式リリース後に再確認すること。
+
+### 実機での到達点
+
+    端末          iPhone（iOS 27）
+    プロンプト     "a coffee cup"
+    ステップ数     4（LCM）
+    生成時間       1.4 秒（3 モデルともコンパイル済みキャッシュあり）
+                  4.9 秒（VAE を GPU 用に初回コンパイルしたとき込み）
+    バンドル       1.1GB（TextEncoder 235 + UNet 821 + VAEDecoder 47）
+
+### 切り分けに要った道具
+
+どれも「壊れてから作った」もので、次に同じことが起きたときの初手になる。
+
+- `ICON_DEBUG=1` — 各段の入出力の min/max/mean と NaN/Inf を出す。
+  **これが無いと「絵が変」以上のことが分からない**
+- `scratchpad/ref_stats.py` 相当 — Python 側で同じ道筋の値を出す。突き合わせる相手が要る
+- `CoreAIBackend.selfTestMarshalling()` — モデルを触らずに NDArray の往復だけ試す。
+  受け渡しが原因かモデルが原因かを最初に切り分ける
+- Mac 上で `.aimodel` を直接実行する（`coreai.runtime`）。**モデルが悪いのか
+  実行環境が悪いのかは、これでしか分けられない**
+- `ICON_UNIT` / `ICON_UNIT_<モデル名>` — 計算ユニットをモデル単位で差し替える
 
 ## 7. 非対応端末
 

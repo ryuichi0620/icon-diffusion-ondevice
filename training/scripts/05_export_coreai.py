@@ -348,6 +348,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", type=int, default=1, help="UNet のバッチ。CFG を使うなら 2")
     parser.add_argument("--quantize", default=None, help="int8 / none")
     parser.add_argument(
+        "--quantize-skip", default=None,
+        help="量子化から外すモジュール名をカンマ区切りで（例: TextEncoder,VAEDecoder）",
+    )
+    parser.add_argument(
         "--precision", default="fp16", choices=["fp16", "fp32"],
         help="配布時の dtype。既定 fp16。**ANE は fp32 を扱えない**ので、"
              "fp32 は数値比較などの検証用と考えること",
@@ -365,6 +369,15 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output).expanduser() if args.output else cfg.export.output_dir
     resources_dir = Path(args.resources).expanduser() if args.resources else cfg.export.swift_resources_dir
     quantize = cfg.export.quantize if args.quantize is None else args.quantize
+    quantize_skip = set(cfg.export.quantize_skip)
+    if args.quantize_skip is not None:
+        quantize_skip = {x for x in args.quantize_skip.split(",") if x}
+    unknown = quantize_skip - set(IO_NAMES)
+    if unknown:
+        raise SystemExit(
+            f"quantize_skip に知らないモジュール名があります: {sorted(unknown)}\n"
+            f"  使えるのは {sorted(IO_NAMES)} です。"
+        )
     precision = args.precision
 
     if not Path(model_path).is_dir():
@@ -430,9 +443,12 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, module in modules.items():
         out_path = output_dir / f"Icon{name}.aimodel"
-        print(f"[stage5] 変換中: {name} -> {out_path.name}")
+        skipped = name in quantize_skip
+        note = "（量子化なし）" if skipped else ""
+        print(f"[stage5] 変換中: {name} -> {out_path.name} {note}")
         with torch.no_grad():
-            export_module(module, examples[name], out_path, quantize, IO_NAMES.get(name))
+            export_module(module, examples[name], out_path,
+                          "none" if skipped else quantize, IO_NAMES.get(name))
         print(f"[stage5]   完了: {out_path}")
 
     print(f"[stage5] 3 モデル出力 -> {output_dir}")

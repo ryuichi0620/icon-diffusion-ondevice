@@ -2,7 +2,9 @@
 import CoreAI
 #endif
 import IconDiffusionKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 被写体を入れて 4 ステップで 1 枚生成するだけの最小画面。
 ///
@@ -74,6 +76,17 @@ struct ContentView: View {
         .task {
             let mode = ProcessInfo.processInfo.environment["ICON_AUTO"] ?? ""
             log("起動しました（ICON_AUTO=\(mode.isEmpty ? "なし" : mode)）")
+            #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
+            if mode == "selftest" || mode == "generate" {
+                do {
+                    let result = try CoreAIBackend.selfTestMarshalling()
+                    log("受け渡しの自己テスト: 最大相対誤差 \(result.maxError) / \(result.count) 件")
+                } catch {
+                    log("受け渡しの自己テストに失敗: \(error.localizedDescription)")
+                }
+            }
+            if mode == "selftest" { log("自動実行を終えました"); return }
+            #endif
             guard !didPrewarm, mode == "prewarm" || mode == "generate" else { return }
             await prewarm()
             if mode == "generate" {
@@ -95,17 +108,13 @@ struct ContentView: View {
             // 切り分け用。ICON_UNIT=default で ANE 優先を外す、ICON_UNIT=cpu で CPU のみ。
             // ICON_ONLY=UNet のように 1 モデルだけ測ることもできる。
             let env = ProcessInfo.processInfo.environment
-            let unit: ComputeUnitKind? = switch env["ICON_UNIT"] {
-            case "default": nil
-            case "cpu": .cpu
-            case "gpu": .gpu
-            default: .neuralEngine
-            }
+            let plan = Self.computeUnitPlan()
             let only = env["ICON_ONLY"]
-            log("計算ユニット=\(unit.map { String(describing: $0) } ?? "既定") 対象=\(only ?? "全部")")
+            log("計算ユニット: \(plan.describe(["TextEncoder", "UNet", "VAEDecoder"])) "
+                + "対象=\(only ?? "全部")")
             try await CoreAIBackend.prewarm(
                 resources: PipelineResources.directory(root),
-                preferredComputeUnit: unit,
+                computeUnits: plan,
                 only: only,
                 onProgress: { done, total in
                     Task { @MainActor in log("モデルを準備中… \(done)/\(total)") }
@@ -122,6 +131,40 @@ struct ContentView: View {
     }
 
     /// 画面と標準出力の両方に出す。実機を手で見られないときは --console で拾う。
+    /// ANE を既定にしつつ、ICON_UNIT で切り替えられるようにする。
+    ///
+    /// **prewarm と生成の両方で同じ値を使うこと。** 以前は生成側が .neuralEngine 決め打ちで、
+    /// ICON_UNIT を変えても生成の計算ユニットは変わらなかった。切り分けの前提が崩れる。
+    private static func unit(_ name: String?) -> ComputeUnitKind? {
+        switch name {
+        case "default": return nil
+        case "cpu": return .cpu
+        case "gpu": return .gpu
+        default: return .neuralEngine
+        }
+    }
+
+    /// 既定は ComputeUnitPlan.recommended（UNet=ANE / VAEDecoder=GPU）。
+    /// ICON_UNIT で全体を、ICON_UNIT_VAEDecoder のようにモデル単位で上書きできる。
+    ///
+    /// **prewarm と生成で同じプランを使うこと。** 違う指定で温めるとキャッシュが当たらず、
+    /// 生成時にもう一度コンパイルが走って数分待たされる。
+    static func computeUnitPlan() -> CoreAIBackend.ComputeUnitPlan {
+        let env = ProcessInfo.processInfo.environment
+        var plan = CoreAIBackend.ComputeUnitPlan.recommended
+        if let raw = env["ICON_UNIT"] {
+            // 全体指定は「既定の上書きを捨てて全部そのユニット」の意味にする。
+            // 切り分けのための指定なので、一部だけ既定が残っていると紛らわしい。
+            plan = CoreAIBackend.ComputeUnitPlan(fallback: unit(raw))
+        }
+        for model in ["TextEncoder", "UNet", "VAEDecoder"] {
+            if let raw = env["ICON_UNIT_\(model)"] {
+                plan.overrides[model] = unit(raw)
+            }
+        }
+        return plan
+    }
+
     private func log(_ message: String) {
         status = message
         print("[app] \(message)")
@@ -143,10 +186,44 @@ struct ContentView: View {
             )
             let started = Date()
             let generated = try await pipeline.generateIcon(subject: subject, options: options)
+            if ProcessInfo.processInfo.environment["ICON_DEBUG"] == "1" {
+                let bytes = generated.rgba
+                let low = bytes.min() ?? 0, high = bytes.max() ?? 0
+                let mean = bytes.reduce(0) { $0 + Int($1) } / max(bytes.count, 1)
+                log("最終画像 RGBA: min=\(low) max=\(high) mean=\(mean)")
+            }
             image = generated.makeCGImage()
             log(String(format: "完了 %.1f 秒", Date().timeIntervalSince(started)))
+            // 画面を見られない状況（実機を手元で確認できないとき）のために書き出す。
+            //   xcrun devicectl device copy from --device <id> \
+            //     --domain-type appDataContainer --domain-identifier com.egoshi.icondiffusion \
+            //     --source Documents/latest.png --destination ./latest.png
+            saveForInspection(generated)
         } catch {
             log("失敗: \(error.localizedDescription)")
+        }
+    }
+
+    /// 生成結果を Documents に PNG で置く。devicectl で取り出して目視確認するため。
+    private func saveForInspection(_ generated: GeneratedImage) {
+        guard let cgImage = generated.makeCGImage(),
+              let documents = FileManager.default.urls(for: .documentDirectory,
+                                                       in: .userDomainMask).first else {
+            log("書き出し先が取れませんでした")
+            return
+        }
+        let url = documents.appendingPathComponent("latest.png")
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        ) else {
+            log("PNG を作れませんでした")
+            return
+        }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        if CGImageDestinationFinalize(destination) {
+            log("書き出しました: Documents/latest.png")
+        } else {
+            log("PNG の書き出しに失敗しました")
         }
     }
 
@@ -165,11 +242,11 @@ struct ContentView: View {
         let resources = PipelineResources.directory(root)
         try resources.validateModels()
         let configuration = try PipelineConfiguration.load(contentsOf: resources.configurationURL)
-        // ANE を優先する。使えなければ Core AI 側が落としてくれる
+
         let backend = try await CoreAIBackend(
             resources: resources,
             configuration: configuration,
-            preferredComputeUnit: .neuralEngine
+            computeUnits: Self.computeUnitPlan()
         )
         let built = try IconDiffusionPipeline(resources: resources, backend: backend)
         pipeline = built

@@ -65,5 +65,9 @@ output_dir = "outputs/fused"
 output_dir = "outputs/coreai"
 # Swift Package にトークナイザ資産と pipeline_config.json を書き出す先
 swift_resources_dir = "../ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources"
-# TODO(core-ai): 量子化の指定方法は coreai-optimization の実物に合わせて要調整
 quantize = "int8"
+# int8 に耐えないモジュールをここで外す。実機で測って決めた値であって、勘ではない。
+# TextEncoder（CLIP）は埋め込みに大きな外れ値があり、per-channel int8 でも振幅が潰れる。
+# 実測: fp32 [-28.05, 33.09] -> int8 [-14.2, 6.8]。これが UNet 全ステップに伝播して絵が壊れる。
+# 詳細は docs/architecture.md 6.7 節。
+quantize_skip = ["TextEncoder"]
