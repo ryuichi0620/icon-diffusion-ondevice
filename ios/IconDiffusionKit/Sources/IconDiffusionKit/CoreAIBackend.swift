@@ -157,23 +157,33 @@ public actor CoreAIBackend: DiffusionBackend {
     /// 既にキャッシュ済みなら何もしない。
     ///
     /// - Parameter onProgress: (完了したモデル数, 全体数)。UI の進捗表示用。
+    /// - Parameter only: 指定するとそのモデルだけ準備する。1 つあたりの所要時間を測るとき用。
     public static func prewarm(
         resources: PipelineResources,
         preferredComputeUnit: ComputeUnitKind? = nil,
+        only: String? = nil,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws {
         try resources.validateModels()
         let options = preferredComputeUnit.map { SpecializationOptions(preferredComputeUnitKind: $0) }
             ?? .default
-        let targets = [
+        var targets = [
             (resources.textEncoderURL, "TextEncoder"),
             (resources.unetURL, "UNet"),
             (resources.vaeDecoderURL, "VAEDecoder"),
         ]
+        if let only {
+            targets = targets.filter { $0.1 == only }
+        }
         for (index, target) in targets.enumerated() {
             _ = try await loadModel(target.0, target.1, options)
             onProgress?(index + 1, targets.count)
         }
+    }
+
+    /// 実行できる計算ユニットの一覧。端末で何が使えるかの確認用。
+    public static var availableComputeUnits: [String] {
+        ComputeUnitKind.availableKinds.map { String(describing: $0) }.sorted()
     }
 
     private static func names(
