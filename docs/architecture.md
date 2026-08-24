@@ -131,6 +131,44 @@ activation を量子化するには代表的な入力を流して値の範囲を
 形だけ合わせた乱数で代用すると活性値の範囲を誤って学習し、絵の品質が黙って落ちる。
 サイズの大半は重みなので、校正なしで安全に効く範囲に留めてある。
 
+### ANE は fp32 を扱えない（2026-08-24 に実機で踏んだ）
+
+<!-- ここを間違えて実機がクラッシュした。二度と踏まないこと -->
+
+**書き出す dtype は fp16 にする。** fp32 のまま端末に載せると起動時に落ちる。
+
+```
+ane_validation_message("Incompatible element type for ANE:
+  expected fp16, f8E4M3, si8, ui8, si16, or ui16")
+failed: ANE I/O op isn't a squeeze / expandDims
+...
+libc++abi: terminating due to uncaught exception of type std::bad_alloc
+```
+
+Attention の各所で ANE 検証に落ちて GPU/CPU にフォールバックし、UNet の
+コンパイル中にメモリを使い切って死ぬ。
+
+**INT8 量子化しても足りない。** 量子化しているのは**重みだけ**で、入出力と活性値は
+fp32 のまま残る。ANE が見るのはそちらなので、別途 fp16 にする必要がある。
+
+| 版 | サイズ（VAEDecoder） | 入出力 dtype | ANE |
+| --- | --- | --- | --- |
+| fp32 | 198MB | float32 | ✗ |
+| int8（重みのみ） | 47MB | float32 | ✗ |
+| fp16 | 99MB | float16 | ✓ |
+| **fp16 + int8** | **50MB** | **float16** | **✓** |
+
+`05_export_coreai.py --precision fp16`（既定）で fp16 になる。
+**トレースは fp32 のまま**行い、書き出す直前に落とす。ここを混同しないこと。
+トレースを fp16 でやると数値が荒れるが、配布 dtype とは別の判断。
+
+**品質は落ちない。** 4 ステップの生成を PyTorch と比べると、画素 MAE は
+0.0718（int8/fp32 IO）→ 0.0587（fp16+int8）と**むしろ改善した**。
+
+**Swift 側も合わせること。** `NDArray` を `[Float]` で作ると fp32 になる。
+`CoreAIBackend` は `pipeline_config.json` の `io` に書かれた dtype を見て
+`Float16` と `Float` を切り替える。ここをハードコードしない。
+
 ### 変換したモデルの検証結果（2026-08-23）
 
 Core AI には **Python のランタイム**（`coreai.runtime`）がある。Xcode を用意しなくても

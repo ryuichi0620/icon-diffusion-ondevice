@@ -235,7 +235,8 @@ def export_tokenizer_files(tokenizer, resources_dir: Path, *, model_path: Path) 
     )
 
 
-def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> dict:
+def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path,
+                          precision: str = "fp16") -> dict:
     """Swift 側が読むトークナイザ資産と pipeline_config.json を書き出す。"""
     import torch
 
@@ -269,6 +270,8 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
     image_size = latent_size * vae_scale_factor
     text_embed_dim = int(pipe.text_encoder.config.hidden_size)
     max_sequence_length = int(getattr(pipe.tokenizer, "model_max_length", 77))
+    # Swift 側はこの dtype を見て NDArray を作る。**ここがズレると静かに壊れる。**
+    float_dtype = "float16" if precision == "fp16" else "float32"
 
     config = {
         "base_model": cfg.model.base_model,
@@ -297,29 +300,30 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path) -> d
         # timestep が float32 の [1] である点に注意（int で渡すとランタイムが拒否する）。
         "io": {
             "TextEncoder": {
+                # トークン ID は整数のまま。ここを float にすると語彙 ID がずれる
                 "inputs": [{"name": "input_ids",
                             "shape": [1, max_sequence_length], "dtype": "int32"}],
                 "outputs": [{"name": "text_embeddings",
-                             "shape": [1, max_sequence_length, text_embed_dim], "dtype": "float32"}],
+                             "shape": [1, max_sequence_length, text_embed_dim], "dtype": float_dtype}],
             },
             "UNet": {
                 "inputs": [
                     {"name": "sample",
-                     "shape": [1, latent_channels, latent_size, latent_size], "dtype": "float32"},
-                    {"name": "timestep", "shape": [1], "dtype": "float32"},
+                     "shape": [1, latent_channels, latent_size, latent_size], "dtype": float_dtype},
+                    {"name": "timestep", "shape": [1], "dtype": float_dtype},
                     {"name": "encoder_hidden_states",
-                     "shape": [1, max_sequence_length, text_embed_dim], "dtype": "float32"},
+                     "shape": [1, max_sequence_length, text_embed_dim], "dtype": float_dtype},
                 ],
                 "outputs": [{"name": "noise_pred",
                              "shape": [1, latent_channels, latent_size, latent_size],
-                             "dtype": "float32"}],
+                             "dtype": float_dtype}],
             },
             "VAEDecoder": {
                 "inputs": [{"name": "latent",
                             "shape": [1, latent_channels, latent_size, latent_size],
-                            "dtype": "float32"}],
+                            "dtype": float_dtype}],
                 "outputs": [{"name": "image",
-                             "shape": [1, 3, image_size, image_size], "dtype": "float32"}],
+                             "shape": [1, 3, image_size, image_size], "dtype": float_dtype}],
             },
         },
         # Swift のテストが突き合わせる値。実スケジューラから導出する
@@ -344,6 +348,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", type=int, default=1, help="UNet のバッチ。CFG を使うなら 2")
     parser.add_argument("--quantize", default=None, help="int8 / none")
     parser.add_argument(
+        "--precision", default="fp16", choices=["fp16", "fp32"],
+        help="配布時の dtype。既定 fp16。**ANE は fp32 を扱えない**ので、"
+             "fp32 は数値比較などの検証用と考えること",
+    )
+    parser.add_argument(
         "--check-only",
         action="store_true",
         help="Core AI を使わず、PyTorch のまま 3 つのラッパーを実行して形だけ確認する",
@@ -356,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output).expanduser() if args.output else cfg.export.output_dir
     resources_dir = Path(args.resources).expanduser() if args.resources else cfg.export.swift_resources_dir
     quantize = cfg.export.quantize if args.quantize is None else args.quantize
+    precision = args.precision
 
     if not Path(model_path).is_dir():
         print(f"[stage5] 変換元がありません: {model_path}", file=sys.stderr)
@@ -370,7 +380,8 @@ def main(argv: list[str] | None = None) -> int:
         VAEDecoderWrapper,
     )
 
-    # 変換は CPU / fp32 で行う。fp16 のまま export すると精度が落ちる。
+    # トレースは CPU / fp32 で行う。ここを fp16 でやるとトレース時の数値が荒れる。
+    # **配布時の dtype は別の判断**で、下で --precision に従って落とす。
     print(f"[stage5] 変換元: {model_path}")
     pipe = pipeline_module.load_base_pipeline(
         cfg, torch.device("cpu"), torch.float32, model_path=model_path
@@ -383,8 +394,22 @@ def main(argv: list[str] | None = None) -> int:
     }
     examples = build_examples(pipe, args.batch)
 
+    # **ANE は fp32 を扱えない。** fp32 のまま出すと "Incompatible element type for ANE:
+    # expected fp16, f8E4M3, si8, ui8, si16, or ui16" で検証に落ち、GPU/CPU に回った挙句
+    # 端末でメモリを食い潰して std::bad_alloc で落ちる（実機で踏んだ）。
+    # 重みだけ int8 にしても入出力と活性は fp32 のままなので、ここが要る。
+    if precision == "fp16":
+        modules = {name: module.half() for name, module in modules.items()}
+        examples = {
+            name: tuple(t.half() if t.is_floating_point() else t for t in sample)
+            for name, sample in examples.items()
+        }
+        print("[stage5] fp16 で書き出します（ANE の要件）")
+    else:
+        print("[stage5] ⚠ fp32 で書き出します。**ANE には載りません**（検証に落ちます）")
+
     if not args.skip_resources:
-        config = write_swift_resources(cfg, pipe, resources_dir, Path(model_path))
+        config = write_swift_resources(cfg, pipe, resources_dir, Path(model_path), precision)
         print(f"[stage5] Swift 資産: {resources_dir}")
         print("[stage5]   vocab.json / merges.txt / pipeline_config.json")
         print(

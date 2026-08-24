@@ -40,7 +40,7 @@
             77,
             768
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         }
       ]
     },
@@ -54,14 +54,14 @@
             64,
             64
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         },
         {
           "name": "timestep",
           "shape": [
             1
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         },
         {
           "name": "encoder_hidden_states",
@@ -70,7 +70,7 @@
             77,
             768
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         }
       ],
       "outputs": [
@@ -82,7 +82,7 @@
             64,
             64
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         }
       ]
     },
@@ -96,7 +96,7 @@
             64,
             64
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         }
       ],
       "outputs": [
@@ -108,7 +108,7 @@
             512,
             512
           ],
-          "dtype": "float32"
+          "dtype": "float16"
         }
       ]
     }

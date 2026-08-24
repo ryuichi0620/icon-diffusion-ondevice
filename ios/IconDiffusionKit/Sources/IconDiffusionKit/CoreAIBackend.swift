@@ -41,6 +41,40 @@ public actor CoreAIBackend: DiffusionBackend {
         static let vaeDecoder = (inputs: ["latent"], output: "image")
     }
 
+    /// 浮動小数の入出力を fp16 で作るか fp32 で作るか。
+    ///
+    /// **ANE は fp32 を扱えない**ので、変換側は既定で fp16 で書き出す。ここがモデルと
+    /// 食い違うとランタイムが弾くか、黙って壊れた値を返す。`pipeline_config.json` の
+    /// `io` に書かれた dtype から決める。
+    private enum FloatPrecision {
+        case fp16, fp32
+
+        init(dtype: String) {
+            self = (dtype == "float16") ? .fp16 : .fp32
+        }
+
+        func makeNDArray(_ values: [Float], shape: [Int]) -> NDArray {
+            switch self {
+            case .fp16: return NDArray(scalars: values.map { Float16($0) }, shape: shape)
+            case .fp32: return NDArray(scalars: values, shape: shape)
+            }
+        }
+
+        func scalars(of array: NDArray) -> [Float] {
+            let count = array.shape.reduce(1, *)
+            switch self {
+            case .fp16:
+                return array.view(as: Float16.self).withUnsafePointer { pointer, _, _ in
+                    UnsafeBufferPointer(start: pointer, count: count).map(Float.init)
+                }
+            case .fp32:
+                return array.view(as: Float.self).withUnsafePointer { pointer, _, _ in
+                    Array(UnsafeBufferPointer(start: pointer, count: count))
+                }
+            }
+        }
+    }
+
     private let configuration: PipelineConfiguration
     private let textEncoder: InferenceFunction
     private let unet: InferenceFunction
@@ -49,6 +83,7 @@ public actor CoreAIBackend: DiffusionBackend {
     private let textEncoderIO: (inputs: [String], output: String)
     private let unetIO: (inputs: [String], output: String)
     private let vaeDecoderIO: (inputs: [String], output: String)
+    private let precision: FloatPrecision
 
     /// - Parameter preferredComputeUnit: 省略すると Core AI に任せる。
     ///   `.neuralEngine` を指定すると ANE を優先する（`ComputeUnitKind.availableKinds` で確認できる）。
@@ -72,6 +107,11 @@ public actor CoreAIBackend: DiffusionBackend {
         self.textEncoderIO = Self.names(configuration, "TextEncoder", DefaultIO.textEncoder)
         self.unetIO = Self.names(configuration, "UNet", DefaultIO.unet)
         self.vaeDecoderIO = Self.names(configuration, "VAEDecoder", DefaultIO.vaeDecoder)
+        // UNet の sample の dtype を代表として見る。3 モデルとも同じ精度で書き出される
+        self.precision = FloatPrecision(
+            dtype: configuration.io?["UNet"]?.inputs.first(where: { $0.name == "sample" })?.dtype
+                ?? "float16"
+        )
     }
 
     private static func load(
@@ -151,6 +191,7 @@ public actor CoreAIBackend: DiffusionBackend {
 
     public func encodeText(inputIDs: [Int32]) async throws -> Tensor {
         // input_ids は int32。Float に丸めて渡すと語彙 ID がずれる
+        // トークン ID は整数のまま渡す。float に落とすと語彙 ID がずれる
         let ids = NDArray(scalars: inputIDs, shape: [1, inputIDs.count])
         return try await run(
             textEncoder,
@@ -168,10 +209,10 @@ public actor CoreAIBackend: DiffusionBackend {
     ) async throws -> Tensor {
         // timestep は float32 の [1]。整数で渡すとランタイムが弾く
         let inputs = [
-            unetIO.inputs[0]: NDArray(scalars: sample.values, shape: sample.shape),
-            unetIO.inputs[1]: NDArray(scalars: [timestep], shape: [1]),
-            unetIO.inputs[2]: NDArray(scalars: encoderHiddenStates.values,
-                                      shape: encoderHiddenStates.shape),
+            unetIO.inputs[0]: precision.makeNDArray(sample.values, shape: sample.shape),
+            unetIO.inputs[1]: precision.makeNDArray([timestep], shape: [1]),
+            unetIO.inputs[2]: precision.makeNDArray(encoderHiddenStates.values,
+                                                    shape: encoderHiddenStates.shape),
         ]
         return try await run(
             unet, inputs: inputs, output: unetIO.output,
@@ -182,7 +223,7 @@ public actor CoreAIBackend: DiffusionBackend {
     public func decodeLatent(_ latent: Tensor) async throws -> Tensor {
         return try await run(
             vaeDecoder,
-            inputs: [vaeDecoderIO.inputs[0]: NDArray(scalars: latent.values, shape: latent.shape)],
+            inputs: [vaeDecoderIO.inputs[0]: precision.makeNDArray(latent.values, shape: latent.shape)],
             output: vaeDecoderIO.output,
             expecting: configuration.decodedImageShape,
             context: "decodeLatent"
@@ -219,14 +260,10 @@ public actor CoreAIBackend: DiffusionBackend {
                 "\(context): 出力の形が違います。期待 \(shape) / 実際 \(array.shape)"
             )
         }
-        return try Tensor(shape: shape, values: scalars(of: array), context: "CoreAIBackend.\(context)")
-    }
-
-    private func scalars(of array: NDArray) -> [Float] {
-        let count = array.shape.reduce(1, *)
-        return array.view(as: Float.self).withUnsafePointer { pointer, _, _ in
-            Array(UnsafeBufferPointer(start: pointer, count: count))
-        }
+        return try Tensor(
+            shape: shape, values: precision.scalars(of: array),
+            context: "CoreAIBackend.\(context)"
+        )
     }
 }
 

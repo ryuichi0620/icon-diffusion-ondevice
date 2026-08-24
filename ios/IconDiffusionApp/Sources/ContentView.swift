@@ -34,11 +34,19 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
 
-            Button(isBusy ? "生成中…" : "生成") {
-                Task { await generate() }
+            HStack(spacing: 12) {
+                Button(isBusy ? "生成中…" : "生成") {
+                    Task { await generate() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy || subject.isEmpty)
+
+                Button("モデルを準備") {
+                    Task { await prewarm() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isBusy || didPrewarm)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isBusy || subject.isEmpty)
 
             Text(status)
                 .font(.footnote)
@@ -48,17 +56,15 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
-        // モデルのコンパイルは重い。生成ボタンを押してから待たせず、
-        // 画面が出た時点で済ませておく。2 回目以降はキャッシュから読むだけ。
-        .task {
-            guard !didPrewarm else { return }
-            didPrewarm = true
-            await prewarm()
-        }
+        // **起動直後に prewarm しない。** 3 モデルを一気にコンパイルすると
+        // ピークメモリで std::bad_alloc に落ちる（実機で踏んだ）。
+        // ユーザーが明示的に押したときだけ走らせる。
     }
 
     private func prewarm() async {
         #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
+        isBusy = true
+        defer { isBusy = false }
         do {
             guard let root = Bundle.main.resourceURL?.appendingPathComponent("Models") else { return }
             status = "モデルを準備中…"
@@ -70,6 +76,7 @@ struct ContentView: View {
                     Task { @MainActor in status = "モデルを準備中… \(done)/\(total)" }
                 }
             )
+            didPrewarm = true
             status = String(format: "準備完了 %.1f 秒", Date().timeIntervalSince(started))
         } catch {
             status = "準備に失敗: \(error.localizedDescription)"
