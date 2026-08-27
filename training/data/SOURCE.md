@@ -70,11 +70,31 @@ Single object only, nothing else in frame.
 「競合するモデル」の解釈次第で、白とも黒とも読める。**法務判断が必要な場合は
 専門家に確認すること。** ここで断定しない。
 
-### 調査の限界
+### 調査の限界（2026-08-27 に再調査して更新）
 
-`openai.com/policies/row-terms-of-use/` は作業環境から 403 で取得できず、
-**規約の原文には当たれていない。** 上記は二次情報（規約を解説・転載しているサイト）
-に基づく。正確を期すならブラウザで原文を読むこと。
+`openai.com/policies/row-terms-of-use/` は自動アクセスでは取得できない
+（WebFetch は 403、実 Chrome の headless も Cloudflare の challenge で弾かれる）。
+**規約ページそのものは開けていない**が、条項の文言は複数の独立ソースで一致して
+引用されており、以下が原文と考えてよい:
+
+> Use Output to develop models that compete with OpenAI.
+
+（利用規約の「What you cannot do」節の禁止事項リストの一項。裏づけ:
+Microsoft Q&A [learn.microsoft.com/en-us/answers/questions/1920477](https://learn.microsoft.com/en-us/answers/questions/1920477/are-there-any-restrictions-on-the-handling-of-outp)
+と OpenAI 公式コミュニティ [community.openai.com/t/863706](https://community.openai.com/t/use-openai-for-generate-specific-task-instructions-for-ft/863706)
+が同一文言を規約由来として引用。2026-08-27 確認）
+
+最終確認はブラウザで
+[openai.com/policies/row-terms-of-use/](https://openai.com/policies/row-terms-of-use/)
+を人が開けば 1 分で済む。文言の存在自体はもう疑っていない。
+
+### 補足（2026-08-27）
+
+- **Azure OpenAI 経由なら適用されるのは Microsoft の規約**（OpenAI の規約ではない）。
+  将来データを作り直す場合の選択肢として記録しておく
+- 姉妹プロジェクト handdrawn-avatar-ondevice は **CC0 素材から学習データを作る**ため、
+  この論点が最初から存在しない。アイコン側も同様の道（権利がクリーンな素材から
+  データセットを再構築する）に切り替えれば論点ごと消せる
 
 ### 影響を受ける範囲
 
