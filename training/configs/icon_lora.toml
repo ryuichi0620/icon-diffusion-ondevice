@@ -15,15 +15,9 @@ lcm_lora = "latent-consistency/lcm-lora-sdv1-5"
 [style]
 # 一度決めたら Stage 2〜6 で変えないこと。学習時と生成時で不一致だとスタイルが呼び出せない。
 trigger_word = "ICONST"
-# 2026-08-30 に "on a pure white background" を追加。**背景を言葉で運ぶため。**
-# 旧テンプレートは背景情報を ICONST の埋め込みだけに頼っており、推論時の縁の白さが
-# 平均 157/255 まで落ちていた（学習データは 254）。姉妹プロジェクトは同句を
-# キャプションに含めて学習し、純白背景を安定して出せている。学習と生成の両方で使う。
-prompt_template = "an icon in {trigger} style, {subject}, flat, minimal, on a pure white background"
+prompt_template = "an icon in {trigger} style, {subject}, flat, minimal"
 fallback_subject = "a simple object"
-# 背景系の禁止語を追加（2026-08-30）。guidance 1.2 ではほぼ効かないが、
-# 3.0 で生成する場合に効く（姉妹プロジェクトの実測）
-negative_prompt = "photo, 3d, gradient, shadow, text, watermark, cluttered, blue background, colored background, dark background, rounded square app icon"
+negative_prompt = "photo, 3d, gradient, shadow, text, watermark, cluttered"
 
 [dataset]
 input_dir = "data/raw"
