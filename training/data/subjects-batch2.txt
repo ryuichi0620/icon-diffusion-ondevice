@@ -1,0 +1,233 @@
+# 拡張バッチ 2（2026-08-30）。既存 154 被写体と重複なし。
+# 評価専用（a rocket / an umbrella / a shopping cart / a magnifying glass）は入れないこと。
+# 楽器
+a violin
+a drum
+a trumpet
+a piano
+a saxophone
+a harp
+a ukulele
+a flute
+a tambourine
+a maraca
+# 台所・食器
+a frying pan
+a kettle
+a toaster
+a whisk
+a rolling pin
+a cutting board
+a chef hat
+a salt shaker
+a fork
+a spoon
+a kitchen knife
+a bento box
+a teacup
+a grater
+a corkscrew
+a jar of jam
+a honey pot
+a thermos
+a lunchbox
+a picnic basket
+# 食べ物・飲み物
+a banana
+an orange
+a peach
+a cherry pie
+a fried egg
+a bagel
+a muffin
+a popsicle
+a candy cane
+a lollipop
+a chocolate bar
+a cookie
+a stack of pancakes
+a baguette
+an onion
+a tomato
+a broccoli
+an eggplant
+a chili pepper
+a corn cob
+a coconut
+a kiwi fruit
+a soda can
+a juice box
+a milkshake
+a wine bottle
+a cocktail glass
+# 生き物
+a cat
+a dog
+a rabbit
+an owl
+a penguin
+a whale
+a dolphin
+a turtle
+a snail
+a bee
+a ladybug
+a fox
+a bear
+a panda
+a frog
+a swan
+a seahorse
+an octopus
+a crab
+a hedgehog
+# 乗り物
+a train
+a tram
+a tractor
+a fire truck
+an ambulance
+a taxi
+a truck
+a motorcycle
+a ferry
+a cable car
+a forklift
+an excavator
+# 道具
+a saw
+an axe
+a shovel
+a rake
+a watering can
+a lawn mower
+a tape measure
+a power drill
+a paint roller
+a bucket
+a broom
+a sponge
+a clothespin
+a clothes iron
+a sewing machine
+a spool of thread
+a safety pin
+# 電子機器
+a smartphone
+a tablet
+a computer keyboard
+a computer mouse
+a printer
+a usb drive
+a pair of headphones
+a speaker
+a television
+a radio
+a drone
+a power plug
+a flashlight
+a microscope
+a telescope
+a satellite
+a satellite dish
+# 衣類・身につけるもの
+a t-shirt
+a sock
+a shoe
+a boot
+a knitted hat
+a scarf
+a glove
+a necktie
+a bow tie
+a belt
+a handbag
+a wallet
+a pair of sunglasses
+a necklace
+# 自然
+a volcano
+a desert island
+an ocean wave
+a snowman
+an igloo
+a seashell
+a starfish
+a feather
+a bird nest
+a beehive
+a maple leaf
+a rose
+a tulip
+a bonsai tree
+# 建物・街
+a tent
+a barn
+a church
+a skyscraper
+a ferris wheel
+a fountain
+a mailbox
+a fire hydrant
+a park bench
+a street lamp
+a pyramid
+a torii gate
+# 遊び・スポーツ
+a treasure chest
+a pair of dice
+a chess piece
+a puzzle piece
+a yo-yo
+a kite
+a teddy bear
+a spinning top
+a bowling pin
+a billiard ball
+a table tennis paddle
+a baseball
+a baseball bat
+a volleyball
+a golf club
+a boxing glove
+a medal
+a whistle
+a stopwatch
+a target board
+a bow and arrow
+a fishing rod
+a surfboard
+a beach ball
+a sled
+a campfire
+# 生活・その他
+a first aid kit
+a pill bottle
+a stethoscope
+a thermometer
+a tooth
+a test tube
+a graduation cap
+a blackboard
+an abacus
+a megaphone
+a pair of binoculars
+a film reel
+a clapperboard
+a ticket
+a bucket of popcorn
+a magic wand
+a lantern
+a fireplace
+a rocking chair
+a picture frame
+a vase
+a pillow
+a safe
+a piggy bank
+a coin
+a credit card
+a price tag
+a padlock and chain
+a sword
+a knight helmet

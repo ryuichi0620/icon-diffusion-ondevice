@@ -19,6 +19,8 @@ training/data/**
 # 出所の記録だけは追跡する。データ本体は入れないが「どこから来たか」は
 # 後から説明できる必要がある（docs/dataset.md の権利まわり）。
 !training/data/SOURCE.md
+# 被写体リストも出所の一部。画像は追跡しないがリストは残す
+!training/data/subjects-*.txt
 training/outputs/**
 !training/outputs/.gitkeep
 *.safetensors
