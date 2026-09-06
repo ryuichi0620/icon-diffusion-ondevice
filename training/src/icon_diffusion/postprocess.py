@@ -115,3 +115,58 @@ def transparency_ratio(image: Image.Image) -> float:
         return 0.0
     alpha = np.asarray(image.split()[-1], dtype=np.uint8)
     return float((alpha == 0).mean())
+
+
+# 学習データのパレット（docs/dataset.md・SOURCE.md の生成プロンプトで固定している 2 色 + 白）
+PALETTE = np.array([
+    [0x1F, 0x2A, 0x44],   # deep navy
+    [0xFF, 0x6B, 0x4A],   # coral
+    [0xFF, 0xFF, 0xFF],   # white（ハイライトや抜き）
+], dtype=np.float32)
+
+
+def snap_to_palette(image: "Image.Image", *, feather: float = 1.0) -> "Image.Image":
+    """不透明画素をパレットの最近色に量子化する。
+
+    **推論時の色のはみ出し（ピンク・黄・薄紫）を決定的に消すため。** 学習データは
+    厳密に 2 色 + 白なので、中間色は「モデルの迷い」であって意図された色ではない。
+    学習で直すのではなく後処理で直すのは、ここが決定的に解ける種類の問題だから
+    （背景の透過と同じ判断。docs/experiments.md Trial 9 の教訓）。
+
+    透過処理の**後**に呼ぶこと。背景が残ったまま量子化すると、背景の中間色が
+    ネイビーと白のどちらへも割れてまだらになる。ここでは alpha > 0 の画素だけを触る。
+
+    feather は量子化後の境界を 1px ぼかしてジャギーを抑える。0 で無効。
+    """
+    from PIL import ImageFilter  # noqa: PLC0415
+
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.float32)
+    rgb = rgba[..., :3]
+    alpha = rgba[..., 3]
+
+    # 各画素とパレット各色の距離 → 最近色
+    distances = np.linalg.norm(rgb[..., None, :] - PALETTE[None, None, :, :], axis=-1)
+    nearest = PALETTE[np.argmin(distances, axis=-1)]
+
+    snapped = rgba.copy()
+    mask = alpha > 0
+    snapped[..., :3][mask] = nearest[mask]
+
+    result = Image.fromarray(snapped.astype(np.uint8), "RGBA")
+    if feather > 0:
+        # 量子化で立ったエッジだけ僅かに緩める。全体をぼかすとフラットさが死ぬので
+        # 半径は小さく固定
+        blurred = result.filter(ImageFilter.GaussianBlur(feather * 0.6))
+        result = Image.blend(result, blurred, 0.35)
+    return result
+
+
+def palette_purity(image: "Image.Image", tolerance: float = 24.0) -> float:
+    """不透明画素のうちパレット近傍色の割合。色のはみ出しの計測用（0-1）。"""
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.float32)
+    mask = rgba[..., 3] > 0
+    if not mask.any():
+        return 1.0
+    rgb = rgba[..., :3][mask]
+    distances = np.linalg.norm(rgb[:, None, :] - PALETTE[None, :, :], axis=-1).min(axis=1)
+    return float((distances <= tolerance).mean())

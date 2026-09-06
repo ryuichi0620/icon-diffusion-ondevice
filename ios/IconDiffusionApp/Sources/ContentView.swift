@@ -6,42 +6,46 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 被写体を入れて 4 ステップで 1 枚生成するだけの最小画面。
+/// 被写体から**候補を 4 枚**生成し、後処理（透過 + パレット量子化）と機械判定を掛けて
+/// 選ばせる画面。アバター側で実証した型の移植。
 ///
-/// **モデルの読み込みは重い**（コンパイルが走る）ので、生成のたびにやらず
-/// 一度だけ作って使い回す。端末で毎回コンパイルさせないためには
-/// `AIModel.specialize` のキャッシュを使う（docs/architecture.md 6.6 節）。
+/// 1 枚だけ生成して祈る作りにしないのは歩留まりのため（透過成功率 74.5%。
+/// 4 候補なら当たりが入る確率は約 99.6%）。機械判定は Mac 側の歩留まり計測と
+/// 同一の定義（IconPostprocess = postprocess.py の移植）なので、数字がそのまま繋がる。
 struct ContentView: View {
+    struct Candidate: Identifiable {
+        let id: Int
+        let raw: GeneratedImage
+        let processed: GeneratedImage
+        let cgImage: CGImage
+        let transparency: Double
+        let seed: UInt64
+        /// 合格 = 背景が抜けて（>=50%）、かつ絵が残っている（<=98%）
+        var ok: Bool { transparency >= 0.5 && transparency <= 0.98 }
+    }
+
     @State private var subject = "a coffee cup"
-    @State private var image: CGImage?
+    @State private var candidates: [Candidate] = []
+    @State private var selectedID: Int?
     @State private var status = ""
     @State private var isBusy = false
     @State private var pipeline: IconDiffusionPipeline?
     @State private var didPrewarm = false
 
-    var body: some View {
-        VStack(spacing: 16) {
-            Group {
-                if let image {
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .aspectRatio(1, contentMode: .fit)
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.quaternary)
-                        .aspectRatio(1, contentMode: .fit)
-                        .overlay(Text("まだ生成していません").foregroundStyle(.secondary))
-                }
-            }
-            .frame(maxWidth: 360)
+    private let candidateCount = 4
 
-            TextField("被写体", text: $subject)
+    var body: some View {
+        VStack(spacing: 14) {
+            selectedView
+            candidateGrid
+
+            TextField("被写体（英語）", text: $subject)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
 
             HStack(spacing: 12) {
-                Button(isBusy ? "生成中…" : "生成") {
-                    Task { await generate() }
+                Button(isBusy ? "生成中…" : "候補を \(candidateCount) 枚生成") {
+                    Task { await generateCandidates() }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isBusy || subject.isEmpty)
@@ -58,42 +62,113 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding()
-        // **起動直後に prewarm しない。** 3 モデルを一気にコンパイルすると
-        // ピークメモリで std::bad_alloc に落ちる（実機で踏んだ）。
-        // ユーザーが明示的に押したときだけ走らせる。
-        //
-        // ただし環境変数があれば自動で走る。実機を手で操作せずに検証するため:
-        //
-        //   DEVICECTL_CHILD_ICON_AUTO=generate \
-        //     xcrun devicectl device process launch --console --terminate-existing \
-        //     --device <id> com.egoshi.icondiffusion
-        //
-        // 起動引数（--auto-prewarm）は devicectl 自身のオプションとして食われるので使えない。
-        // devicectl は DEVICECTL_CHILD_ 接頭辞の環境変数をアプリに渡してくれる。
+        // 起動直後に prewarm しない（初回コンパイルのピークメモリ対策）。
+        // DEVICECTL_CHILD_ICON_AUTO=generate で無人実行。
         .task {
             let mode = ProcessInfo.processInfo.environment["ICON_AUTO"] ?? ""
             log("起動しました（ICON_AUTO=\(mode.isEmpty ? "なし" : mode)）")
             #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
-            if mode == "selftest" || mode == "generate" {
+            if mode == "selftest" {
                 do {
                     let result = try CoreAIBackend.selfTestMarshalling()
                     log("受け渡しの自己テスト: 最大相対誤差 \(result.maxError) / \(result.count) 件")
                 } catch {
                     log("受け渡しの自己テストに失敗: \(error.localizedDescription)")
                 }
+                log("自動実行を終えました")
+                return
             }
-            if mode == "selftest" { log("自動実行を終えました"); return }
             #endif
             guard !didPrewarm, mode == "prewarm" || mode == "generate" else { return }
+            if let override = ProcessInfo.processInfo.environment["ICON_SUBJECT"] {
+                subject = override
+            }
             await prewarm()
             if mode == "generate" {
-                await generate()
+                await generateCandidates()
             }
             log("自動実行を終えました")
         }
+    }
+
+    @ViewBuilder private var selectedView: some View {
+        Group {
+            if let selected = candidates.first(where: { $0.id == selectedID }) {
+                // 透過が見えるように市松の上へ載せる（Finder のプレビューと同じ流儀）
+                Image(decorative: selected.cgImage, scale: 1)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fit)
+                    .background(CheckerboardBackground())
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.quaternary)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay(
+                        Text(candidates.isEmpty ? "まだ生成していません" : "候補をタップして選ぶ")
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(maxWidth: 300)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder private var candidateGrid: some View {
+        if !candidates.isEmpty {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
+                      spacing: 8) {
+                ForEach(candidates) { candidate in
+                    candidateCell(candidate)
+                }
+            }
+        }
+    }
+
+    // 緑 = 機械判定を通過（背景が抜けた）、赤 = 落ちた。落ちたものも見せて選べる。
+    // 判定は背景の一様性しか見ておらず、被写体の正しさは人の目のほうが偉い
+    private func candidateCell(_ candidate: Candidate) -> some View {
+        let colour: Color = candidate.ok ? .green : .red
+        let width: CGFloat = selectedID == candidate.id ? 4 : 2
+        return Image(decorative: candidate.cgImage, scale: 1)
+            .resizable()
+            .aspectRatio(1, contentMode: .fit)
+            .background(Color.white)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(colour, lineWidth: width))
+            .onTapGesture { select(candidate) }
+    }
+
+    private func select(_ candidate: Candidate) {
+        selectedID = candidate.id
+        log(String(format: "候補 %d を選択（透過 %.0f%%・seed %llu）",
+                   candidate.id + 1, candidate.transparency * 100, candidate.seed))
+        saveForInspection(candidate.processed, name: "latest.png")
+    }
+
+    private static func unit(_ name: String?) -> ComputeUnitKind? {
+        switch name {
+        case "default": return nil
+        case "cpu": return .cpu
+        case "gpu": return .gpu
+        default: return .neuralEngine
+        }
+    }
+
+    /// 既定は ComputeUnitPlan.recommended（UNet=ANE / VAEDecoder=GPU）。
+    static func computeUnitPlan() -> CoreAIBackend.ComputeUnitPlan {
+        let env = ProcessInfo.processInfo.environment
+        var plan = CoreAIBackend.ComputeUnitPlan.recommended
+        if let raw = env["ICON_UNIT"] {
+            plan = CoreAIBackend.ComputeUnitPlan(fallback: unit(raw))
+        }
+        for model in ["TextEncoder", "UNet", "VAEDecoder"] {
+            if let raw = env["ICON_UNIT_\(model)"] {
+                plan.overrides[model] = unit(raw)
+            }
+        }
+        return plan
     }
 
     private func prewarm() async {
@@ -104,18 +179,12 @@ struct ContentView: View {
             guard let root = Bundle.main.resourceURL?.appendingPathComponent("Models") else { return }
             log("モデルを準備中…")
             let started = Date()
-            log("使える計算ユニット: \(CoreAIBackend.availableComputeUnits)")
-            // 切り分け用。ICON_UNIT=default で ANE 優先を外す、ICON_UNIT=cpu で CPU のみ。
-            // ICON_ONLY=UNet のように 1 モデルだけ測ることもできる。
-            let env = ProcessInfo.processInfo.environment
             let plan = Self.computeUnitPlan()
-            let only = env["ICON_ONLY"]
-            log("計算ユニット: \(plan.describe(["TextEncoder", "UNet", "VAEDecoder"])) "
-                + "対象=\(only ?? "全部")")
+            log("計算ユニット: \(plan.describe(["TextEncoder", "UNet", "VAEDecoder"]))")
             try await CoreAIBackend.prewarm(
                 resources: PipelineResources.directory(root),
                 computeUnits: plan,
-                only: only,
+                only: ProcessInfo.processInfo.environment["ICON_ONLY"],
                 onProgress: { done, total in
                     Task { @MainActor in log("モデルを準備中… \(done)/\(total)") }
                 }
@@ -130,112 +199,81 @@ struct ContentView: View {
         #endif
     }
 
-    /// 画面と標準出力の両方に出す。実機を手で見られないときは --console で拾う。
-    /// ANE を既定にしつつ、ICON_UNIT で切り替えられるようにする。
-    ///
-    /// **prewarm と生成の両方で同じ値を使うこと。** 以前は生成側が .neuralEngine 決め打ちで、
-    /// ICON_UNIT を変えても生成の計算ユニットは変わらなかった。切り分けの前提が崩れる。
-    private static func unit(_ name: String?) -> ComputeUnitKind? {
-        switch name {
-        case "default": return nil
-        case "cpu": return .cpu
-        case "gpu": return .gpu
-        default: return .neuralEngine
-        }
-    }
-
-    /// 既定は ComputeUnitPlan.recommended（UNet=ANE / VAEDecoder=GPU）。
-    /// ICON_UNIT で全体を、ICON_UNIT_VAEDecoder のようにモデル単位で上書きできる。
-    ///
-    /// **prewarm と生成で同じプランを使うこと。** 違う指定で温めるとキャッシュが当たらず、
-    /// 生成時にもう一度コンパイルが走って数分待たされる。
-    static func computeUnitPlan() -> CoreAIBackend.ComputeUnitPlan {
-        let env = ProcessInfo.processInfo.environment
-        var plan = CoreAIBackend.ComputeUnitPlan.recommended
-        if let raw = env["ICON_UNIT"] {
-            // 全体指定は「既定の上書きを捨てて全部そのユニット」の意味にする。
-            // 切り分けのための指定なので、一部だけ既定が残っていると紛らわしい。
-            plan = CoreAIBackend.ComputeUnitPlan(fallback: unit(raw))
-        }
-        for model in ["TextEncoder", "UNet", "VAEDecoder"] {
-            if let raw = env["ICON_UNIT_\(model)"] {
-                plan.overrides[model] = unit(raw)
-            }
-        }
-        return plan
-    }
-
     private func log(_ message: String) {
         status = message
         print("[app] \(message)")
     }
 
-    private func generate() async {
+    private func generateCandidates() async {
         isBusy = true
         defer { isBusy = false }
+        candidates = []
+        selectedID = nil
         do {
             let pipeline = try await preparedPipeline()
-            log("生成中…")
-            let options = IconDiffusionPipeline.Options(
-                steps: 4,
-                guidanceScale: 1.0,   // 端末では CFG なし。UNet の実行回数が半分になる
-                seed: UInt64.random(in: 0..<UInt64.max),
-                onProgress: { done, total in
-                    Task { @MainActor in log("ステップ \(done)/\(total)") }
-                }
-            )
+            let env = ProcessInfo.processInfo.environment
+            // 生成条件は Mac 側スイープで確定した値を既定にし、実験用に環境変数で上書き可
+            let steps = Int(env["ICON_STEPS"] ?? "") ?? 4
+            let guidance = Float(env["ICON_GUIDANCE"] ?? "") ?? 1.0
+            log("生成中…（\(steps) ステップ / guidance \(guidance)）")
+
             let started = Date()
-            let generated = try await pipeline.generateIcon(subject: subject, options: options)
-            if ProcessInfo.processInfo.environment["ICON_DEBUG"] == "1" {
-                let bytes = generated.rgba
-                let low = bytes.min() ?? 0, high = bytes.max() ?? 0
-                let mean = bytes.reduce(0) { $0 + Int($1) } / max(bytes.count, 1)
-                log("最終画像 RGBA: min=\(low) max=\(high) mean=\(mean)")
+            for index in 0..<candidateCount {
+                log("候補 \(index + 1)/\(candidateCount) を生成中…")
+                let seed = UInt64.random(in: 0..<UInt64.max)
+                let options = IconDiffusionPipeline.Options(
+                    steps: steps,
+                    guidanceScale: guidance,
+                    seed: seed
+                )
+                let generated = try await pipeline.generateIcon(subject: subject, options: options)
+                let result = IconPostprocess.process(generated)
+                guard let cgImage = result.image.makeAlphaCGImage() else { continue }
+                let candidate = Candidate(id: index, raw: generated, processed: result.image,
+                                          cgImage: cgImage, transparency: result.transparency,
+                                          seed: seed)
+                candidates.append(candidate)
+                log(String(format: "候補 %d: %@（透過 %.0f%%）", index + 1,
+                           candidate.ok ? "合格" : "不合格", result.transparency * 100))
+                saveForInspection(result.image, name: "candidate\(index + 1).png")
             }
-            image = generated.makeCGImage()
-            log(String(format: "完了 %.1f 秒", Date().timeIntervalSince(started)))
-            // 画面を見られない状況（実機を手元で確認できないとき）のために書き出す。
-            //   xcrun devicectl device copy from --device <id> \
-            //     --domain-type appDataContainer --domain-identifier com.egoshi.icondiffusion \
-            //     --source Documents/latest.png --destination ./latest.png
-            saveForInspection(generated)
+
+            let passed = candidates.filter(\.ok)
+            log(String(format: "完了 %.1f 秒。機械判定 %d/%d 通過",
+                       Date().timeIntervalSince(started), passed.count, candidates.count))
+            if ProcessInfo.processInfo.environment["ICON_AUTO"] == "generate" {
+                // 無人実行では人が選べない。**透過率最大を選んではいけない**（ほぼ空の
+                // 絵が勝ってしまう。実機で確認済み）。学習データの被写体占有率は約 70% =
+                // 透過率 0.55〜0.75 相当なので、0.7 に最も近いものを採用する
+                let target = 0.7
+                let pool = passed.isEmpty ? candidates : passed
+                let choice = pool.min(by: {
+                    abs($0.transparency - target) < abs($1.transparency - target)
+                })
+                if let choice { select(choice) }
+            }
         } catch {
             log("失敗: \(error.localizedDescription)")
         }
     }
 
-    /// 生成結果を Documents に PNG で置く。devicectl で取り出して目視確認するため。
-    private func saveForInspection(_ generated: GeneratedImage) {
-        guard let cgImage = generated.makeCGImage(),
+    /// 後処理済み（透過 RGBA）を Documents に置く。devicectl で取り出して確認するため。
+    private func saveForInspection(_ image: GeneratedImage, name: String) {
+        guard let cgImage = image.makeAlphaCGImage(),
               let documents = FileManager.default.urls(for: .documentDirectory,
-                                                       in: .userDomainMask).first else {
-            log("書き出し先が取れませんでした")
-            return
-        }
-        let url = documents.appendingPathComponent("latest.png")
+                                                       in: .userDomainMask).first else { return }
+        let url = documents.appendingPathComponent(name)
         guard let destination = CGImageDestinationCreateWithURL(
             url as CFURL, UTType.png.identifier as CFString, 1, nil
-        ) else {
-            log("PNG を作れませんでした")
-            return
-        }
+        ) else { return }
         CGImageDestinationAddImage(destination, cgImage, nil)
-        if CGImageDestinationFinalize(destination) {
-            log("書き出しました: Documents/latest.png")
-        } else {
-            log("PNG の書き出しに失敗しました")
-        }
+        CGImageDestinationFinalize(destination)
     }
 
     private func preparedPipeline() async throws -> IconDiffusionPipeline {
         if let pipeline { return pipeline }
-        // Core AI はシミュレータの SDK に入っていない（実機専用）。
-        // ここを #if で切らないと、シミュレータ向けビルドがそもそも通らない。
         #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
         log("モデルを読み込み中…")
-        // .aimodel はディレクトリなので、バンドルにはフォルダ参照で入れている。
-        // そのため直下ではなく Resources/ の下にある。bundled(in:) は
-        // Bundle.url(forResource:) を使うのでサブフォルダを見てくれない。
         guard let root = Bundle.main.resourceURL?.appendingPathComponent("Models") else {
             throw IconDiffusionError.unsupportedDevice("バンドルのリソースが見つかりません")
         }
@@ -256,5 +294,26 @@ struct ContentView: View {
             "Core AI が使えません。シミュレータでは動きません（実機専用）。"
         )
         #endif
+    }
+}
+
+/// 透過確認用の市松背景
+struct CheckerboardBackground: View {
+    var body: some View {
+        Canvas { context, size in
+            let cell: CGFloat = 12
+            for row in 0..<Int(size.height / cell) + 1 {
+                for column in 0..<Int(size.width / cell) + 1 {
+                    if (row + column) % 2 == 0 {
+                        context.fill(
+                            Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell,
+                                        width: cell, height: cell)),
+                            with: .color(Color(white: 0.9))
+                        )
+                    }
+                }
+            }
+        }
+        .background(Color.white)
     }
 }

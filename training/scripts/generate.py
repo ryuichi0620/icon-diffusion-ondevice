@@ -34,7 +34,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from PIL import Image  # noqa: E402
 
 from icon_diffusion import load_config, load_torch_stack  # noqa: E402
-from icon_diffusion.postprocess import remove_flat_background, transparency_ratio  # noqa: E402
+from icon_diffusion.postprocess import (  # noqa: E402
+    palette_purity,
+    remove_flat_background,
+    snap_to_palette,
+    transparency_ratio,
+)
 
 SHEET_BACKGROUND = (235, 235, 235)
 
@@ -96,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     output = parser.add_argument_group("出力")
     output.add_argument("--out", default=None, help="出力ディレクトリ（既定 outputs/generated）")
     output.add_argument("--transparent", action="store_true", help="背景を透過にして RGBA で保存する")
+    output.add_argument("--snap-palette", action="store_true",
+                        help="不透明画素をパレット（ネイビー/コーラル/白）へ量子化する。"
+                             "--transparent の後に適用される。色のはみ出しを決定的に消す")
     output.add_argument("--tolerance", type=float, default=0.06, help="背景とみなす色差")
     output.add_argument("--feather", type=float, default=0.12, help="輪郭を半透明にする幅")
     output.add_argument("--no-sheet", action="store_true", help="コンタクトシートを作らない")
@@ -179,9 +187,13 @@ def main(argv: list[str] | None = None) -> int:
             total_seconds += elapsed
 
             alpha_ratio = None
+            purity = None
             if args.transparent:
                 image = remove_flat_background(image, tolerance=args.tolerance, feather=args.feather)
                 alpha_ratio = transparency_ratio(image)
+            if args.snap_palette:
+                image = snap_to_palette(image)
+                purity = palette_purity(image)
 
             name = f"{safe_name(subject)}_{variation + 1:02d}.png"
             image.save(out_dir / name)
