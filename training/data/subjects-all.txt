@@ -1,0 +1,374 @@
+# 全学習被写体（raw のファイル名から自動生成）。変奏バッチ用
+a backpack
+a bagel
+a baguette
+a balloon
+a banana
+a bar of soap
+a barn
+a baseball
+a baseball bat
+a basketball
+a bathtub
+a battery
+a beach ball
+a bear
+a bed
+a bee
+a beehive
+a beer mug
+a bell
+a belt
+a bento box
+a bicycle
+a billiard ball
+a bird nest
+a birthday cake
+a blackboard
+a blender
+a bonsai tree
+a book
+a boot
+a bottle
+a bow and arrow
+a bow tie
+a bowl of ramen
+a bowling pin
+a boxing glove
+a bridge
+a briefcase
+a broccoli
+a broom
+a bucket
+a bucket of popcorn
+a bunch of grapes
+a bus
+a butterfly
+a cable car
+a cactus
+a calculator
+a calendar
+a camera
+a campfire
+a candle
+a candy cane
+a canoe
+a car
+a carrot
+a castle
+a cat
+a chair
+a chef hat
+a cherry
+a cherry pie
+a chess piece
+a chili pepper
+a chocolate bar
+a church
+a clapperboard
+a clipboard
+a clothes iron
+a clothespin
+a cloud
+a cocktail glass
+a coconut
+a coffee cup
+a coin
+a comb
+a compass
+a computer keyboard
+a computer mouse
+a cookie
+a corkscrew
+a corn cob
+a crab
+a credit card
+a croissant
+a crown
+a cupcake
+a cutting board
+a desert island
+a desk lamp
+a diamond
+a diamond ring
+a dog
+a dolphin
+a donut
+a door
+a drone
+a drum
+a dumbbell
+a factory
+a feather
+a ferris wheel
+a ferry
+a film reel
+a fire hydrant
+a fire truck
+a fireplace
+a first aid kit
+a fish
+a fishing rod
+a flag
+a flame
+a flashlight
+a flower
+a flute
+a folder
+a fork
+a forklift
+a fountain
+a four leaf clover
+a fox
+a fried egg
+a frog
+a frying pan
+a game controller
+a gift box
+a globe
+a glove
+a golf club
+a graduation cap
+a grater
+a guitar
+a hamburger
+a hammer
+a hand mirror
+a handbag
+a harp
+a heart
+a hedgehog
+a helicopter
+a honey pot
+a hot air balloon
+a hot dog
+a house
+a house key
+a jar of jam
+a juice box
+a kettle
+a kitchen knife
+a kite
+a kiwi fruit
+a knight helmet
+a knitted hat
+a ladder
+a ladybug
+a lantern
+a laptop
+a lawn mower
+a leaf
+a lemon
+a light bulb
+a lighthouse
+a lightning bolt
+a lipstick
+a loaf of bread
+a lock
+a lollipop
+a lunchbox
+a magic wand
+a magnet
+a mailbox
+a map pin
+a maple leaf
+a maraca
+a medal
+a megaphone
+a microphone
+a microscope
+a microwave oven
+a milk carton
+a milkshake
+a moon
+a motorcycle
+a mountain
+a muffin
+a mushroom
+a music note
+a necklace
+a necktie
+a newspaper
+a notebook
+a padlock and chain
+a paint brush
+a paint roller
+a pair of binoculars
+a pair of dice
+a pair of headphones
+a pair of scissors
+a pair of sunglasses
+a palm tree
+a panda
+a paper airplane
+a paper clip
+a parachute
+a park bench
+a peach
+a pear
+a pencil
+a penguin
+a piano
+a picnic basket
+a picture frame
+a piggy bank
+a pill bottle
+a pillow
+a pine tree
+a pineapple
+a pizza slice
+a popsicle
+a potted plant
+a power drill
+a power plug
+a pretzel
+a price tag
+a printer
+a pumpkin
+a puzzle piece
+a pyramid
+a rabbit
+a radio
+a rainbow
+a rake
+a refrigerator
+a road sign
+a robot
+a rocking chair
+a rolling pin
+a rose
+a ruler
+a safe
+a safety pin
+a sailboat
+a salt shaker
+a sandwich
+a satellite
+a satellite dish
+a saw
+a saxophone
+a scarf
+a scooter
+a screwdriver
+a seahorse
+a seashell
+a sewing machine
+a shield
+a shoe
+a shopping bag
+a shovel
+a skateboard
+a skyscraper
+a sled
+a smartphone
+a snail
+a snowflake
+a snowman
+a soccer ball
+a sock
+a soda can
+a sofa
+a speaker
+a spinning top
+a sponge
+a spool of thread
+a spoon
+a stack of pancakes
+a staircase
+a stapler
+a star
+a starfish
+a stethoscope
+a stopwatch
+a strawberry
+a street lamp
+a submarine
+a sun
+a sunflower
+a surfboard
+a sushi roll
+a swan
+a sword
+a t shirt
+a table tennis paddle
+a tablet
+a taco
+a tambourine
+a tape measure
+a target board
+a taxi
+a teacup
+a teapot
+a teddy bear
+a telescope
+a television
+a tennis racket
+a tent
+a test tube
+a thermometer
+a thermos
+a ticket
+a toaster
+a tomato
+a toolbox
+a tooth
+a toothbrush
+a torii gate
+a towel
+a tractor
+a traffic cone
+a traffic light
+a train
+a tram
+a treasure chest
+a trophy
+a truck
+a trumpet
+a tulip
+a turtle
+a ukulele
+a usb drive
+a vase
+a violin
+a volcano
+a volleyball
+a wall clock
+a wallet
+a washing machine
+a water drop
+a watering can
+a watermelon slice
+a wedge of cheese
+a whale
+a whisk
+a whistle
+a windmill
+a window
+a wine bottle
+a wine glass
+a wooden fence
+a wrench
+a wristwatch
+a yo yo
+an abacus
+an acorn
+an airplane
+an alarm clock
+an ambulance
+an anchor
+an apple
+an avocado
+an axe
+an egg
+an eggplant
+an electric fan
+an envelope
+an excavator
+an hourglass
+an ice cream cone
+an igloo
+an ocean wave
+an octopus
+an onion
+an orange
+an owl

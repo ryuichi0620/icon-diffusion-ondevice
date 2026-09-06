@@ -52,6 +52,10 @@ def main() -> int:
     parser.add_argument("--out", default=str(ROOT / "data" / "raw"))
     parser.add_argument("--interval", type=float, default=13.0,
                         help="送信間隔秒。レート制限 5 枚/分 に合わせた既定 13 秒")
+    parser.add_argument("--suffix", default="01",
+                        help="ファイル名の連番（<slug>-<suffix>.png）。被写体ごとの 2 枚目を"
+                             "作るときは 02。**1 被写体 1 枚だと物体の構造（持ち手の数など）を"
+                             "一度しか見せられない**ため、変奏を足す用途")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -69,7 +73,7 @@ def main() -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    todo = [s for s in subjects if not (out_dir / f"{slug(s)}-01.png").is_file()]
+    todo = [s for s in subjects if not (out_dir / f"{slug(s)}-{args.suffix}.png").is_file()]
     print(f"[stage0] {len(subjects)} 被写体のうち未生成 {len(todo)} 枚"
           f"（既存はスキップ、費用目安 ${len(todo) * 0.006:.2f}）")
     if args.dry_run:
@@ -79,7 +83,7 @@ def main() -> int:
 
     failed: list[str] = []
     for index, subject in enumerate(todo):
-        target = out_dir / f"{slug(subject)}-01.png"
+        target = out_dir / f"{slug(subject)}-{args.suffix}.png"
         ok = False
         for attempt in (1, 2):
             result = subprocess.run(

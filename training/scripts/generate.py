@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     output = parser.add_argument_group("出力")
     output.add_argument("--out", default=None, help="出力ディレクトリ（既定 outputs/generated）")
     output.add_argument("--transparent", action="store_true", help="背景を透過にして RGBA で保存する")
+    output.add_argument("--negative", default=None,
+                        help="ネガティブプロンプトの上書き（実験用）。既定は設定ファイルの値")
     output.add_argument("--snap-palette", action="store_true",
                         help="不透明画素をパレット（ネイビー/コーラル/白）へ量子化する。"
                              "--transparent の後に適用される。色のはみ出しを決定的に消す")
@@ -178,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
             started = time.perf_counter()
             image = pipe(
                 prompt,
-                negative_prompt=cfg.style.negative_prompt or None,
+                negative_prompt=(args.negative if args.negative is not None
+                                 else cfg.style.negative_prompt) or None,
                 num_inference_steps=steps,
                 guidance_scale=guidance,
                 generator=pipeline_module.make_generator(seed),
