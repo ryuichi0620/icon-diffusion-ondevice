@@ -30,6 +30,12 @@ if ! XCODE=$(find_xcode); then
   exit 1
 fi
 XCRUN="$XCODE/Contents/Developer/usr/bin/xcrun"
+# Xcode-beta には xcrun が入っていないことがある（26.x beta で実際に無かった）。
+# その場合はシステムの xcrun を使う。DEVELOPER_DIR で行き先は固定できる
+if [[ ! -x "$XCRUN" ]]; then
+  XCRUN="/usr/bin/xcrun"
+  export DEVELOPER_DIR="$XCODE/Contents/Developer"
+fi
 XCODEBUILD="$XCODE/Contents/Developer/usr/bin/xcodebuild"
 
 if [[ ! -d Models ]] || [[ -z "$(ls -A Models 2>/dev/null | grep -v '^\.gitkeep$')" ]]; then
