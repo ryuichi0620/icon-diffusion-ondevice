@@ -40,7 +40,10 @@ checkpointing_steps = 200
 
 [preview]
 output_dir = "outputs/preview"
-steps = 4
+# 2026-09-09 の形の採点で 8 步が 4 步を上回った（b5・96 枚ずつ・seed 42/7 の両方で）。
+# 平均 0.399 -> 0.493、合格率 29.2% -> 38.5%、4 枚の最良 0.809 -> 0.868。
+# 透過成功率（Trial 11）では 4 步が勝っていたが、あの指標は形を見ていない。
+steps = 8
 # Mac での質感確認は企画メモどおり 1.2。端末側は 1.0（CFG なし）が既定。
 # docs/architecture.md の「CFG を使うか」を参照。
 guidance_scale = 1.2

@@ -2,24 +2,16 @@ import CoreGraphics
 import Foundation
 import IconDiffusionKit
 
-/// 生成アイコンの後処理と機械判定。**training/src/icon_diffusion/postprocess.py の移植で、
+/// 生成アイコンの背景を透過にする。**training/src/icon_diffusion/postprocess.py の移植で、
 /// あちらが参照実装。** 同じ処理を載せることで、Mac で測った「透過成功率 74.5%」が
 /// そのまま端末の判定に一致する（アバター側 PartScreen と同じ設計判断）。
 ///
-/// 処理は 2 段:
-///   1. 背景の透過 — 縁の中央値色を背景とみなし、縁から許容誤差内を塗りつぶしで抜く。
-///      **縁から連結した領域だけを抜く**のは、被写体内部の同色（白い湯気など）を
-///      巻き込まないため（参照実装の _flood_from_border と同じ理由）
-///   2. パレット量子化 — 残った画素をネイビー/コーラル/白の最近色へ。推論時の
-///      色のはみ出し（ピンク・薄紫）は「モデルの迷い」であって意図色ではない
+/// 縁の中央値色を背景とみなし、**縁から連結した領域だけ**を抜く。被写体内部の同色
+/// （白い湯気など）を巻き込まないため（参照実装の _flood_from_border と同じ理由）。
+///
+/// 色の量子化と形の整形はこの後段の `IconShapes.polish()` が持つ。ここで量子化しないのは、
+/// 「中途半端な塗り」の量（IconShapes.mushRatio）を**量子化する前の色**で測るため。
 enum IconPostprocess {
-    /// 学習データのパレット（SOURCE.md の生成プロンプトで固定している 2 色 + 白）
-    static let palette: [(UInt8, UInt8, UInt8)] = [
-        (0x1F, 0x2A, 0x44),   // deep navy
-        (0xFF, 0x6B, 0x4A),   // coral
-        (0xFF, 0xFF, 0xFF),   // white
-    ]
-
     struct Result {
         var image: GeneratedImage
         /// 透過にできた画素の割合。**これが機械判定の指標**（>= 0.5 で合格）。
@@ -82,7 +74,7 @@ enum IconPostprocess {
             }
         }
 
-        // --- 2. 前景をパレットへ量子化、背景はアルファ 0 ---
+        // --- 2. 背景はアルファ 0、前景は色をそのまま残す ---
         var transparentCount = 0
         for index in 0..<(width * height) {
             let o = index * 4
@@ -90,18 +82,6 @@ enum IconPostprocess {
                 rgba[o] = 0; rgba[o + 1] = 0; rgba[o + 2] = 0; rgba[o + 3] = 0
                 transparentCount += 1
             } else {
-                var best = 0
-                var bestDistance = Int.max
-                for (i, colour) in palette.enumerated() {
-                    let dr = Int(rgba[o]) - Int(colour.0)
-                    let dg = Int(rgba[o + 1]) - Int(colour.1)
-                    let db = Int(rgba[o + 2]) - Int(colour.2)
-                    let distance = dr * dr + dg * dg + db * db
-                    if distance < bestDistance { bestDistance = distance; best = i }
-                }
-                rgba[o] = palette[best].0
-                rgba[o + 1] = palette[best].1
-                rgba[o + 2] = palette[best].2
                 rgba[o + 3] = 255
             }
         }

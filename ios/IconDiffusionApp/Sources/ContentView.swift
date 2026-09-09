@@ -6,12 +6,13 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 被写体から**候補を 4 枚**生成し、後処理（透過 + パレット量子化）と機械判定を掛けて
-/// 選ばせる画面。アバター側で実証した型の移植。
+/// 被写体から**候補を複数枚**生成し、後処理（透過 → 形の整形 → 滑らかに描き直し）と
+/// 機械判定を掛けて選ばせる画面。アバター側で実証した型の移植。
 ///
-/// 1 枚だけ生成して祈る作りにしないのは歩留まりのため（透過成功率 74.5%。
-/// 4 候補なら当たりが入る確率は約 99.6%）。機械判定は Mac 側の歩留まり計測と
-/// 同一の定義（IconPostprocess = postprocess.py の移植）なので、数字がそのまま繋がる。
+/// 1 枚だけ生成して祈る作りにしないのは、**形の当たり外れが大きい**から。整形で消せるのは
+/// 中途半端な塗りと輪郭のガタつきまでで、構造の破綻（持ち手が 2 つ、ロケットが矢印になる）は
+/// 消せない。そこで候補を出し、`IconShapes.report()` の点で並べ替えて上位を見せる。
+/// 採点は Mac 側と同一の式（IconShapes = shapes.py の移植）なので、数字がそのまま繋がる。
 struct ContentView: View {
     struct Candidate: Identifiable {
         let id: Int
@@ -19,9 +20,11 @@ struct ContentView: View {
         let processed: GeneratedImage
         let cgImage: CGImage
         let transparency: Double
+        let report: IconShapes.Report
         let seed: UInt64
-        /// 合格 = 背景が抜けて（>=50%）、かつ絵が残っている（<=98%）
-        var ok: Bool { transparency >= 0.5 && transparency <= 0.98 }
+        /// 合格 = 形の点が閾値以上。**背景が抜けたかではなく形で判定する**
+        /// （透過率だけ見ていた頃は、ほぼ空の絵が「合格」になっていた）
+        var ok: Bool { report.score >= IconShapes.passScore }
     }
 
     @State private var subject = "a coffee cup"
@@ -32,6 +35,9 @@ struct ContentView: View {
     @State private var pipeline: IconDiffusionPipeline?
     @State private var didPrewarm = false
 
+    /// 出力解像度。整形は濃度場を拡大してから二値化するので、512 で作った絵でも
+    /// 1024 で輪郭が階段にならない
+    private let outputSize = 1024
     private let candidateCount = 4
 
     var body: some View {
@@ -120,30 +126,40 @@ struct ContentView: View {
         if !candidates.isEmpty {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
                       spacing: 8) {
-                ForEach(candidates) { candidate in
+                // 点の高い順に並べる。人が最初に目をやる位置に一番まともな形が来る
+                ForEach(candidates.sorted(by: { $0.report.score > $1.report.score })) { candidate in
                     candidateCell(candidate)
                 }
             }
         }
     }
 
-    // 緑 = 機械判定を通過（背景が抜けた）、赤 = 落ちた。落ちたものも見せて選べる。
-    // 判定は背景の一様性しか見ておらず、被写体の正しさは人の目のほうが偉い
+    // 緑 = 形の点が閾値以上、赤 = 下回った。落ちたものも見せて選べるようにしてある。
+    // 採点は形の素直さ（塗りの量・破片・輪郭の粗さ）しか見ておらず、
+    // **それが本当にコーヒーカップに見えるかは人の目のほうが偉い**
     private func candidateCell(_ candidate: Candidate) -> some View {
         let colour: Color = candidate.ok ? .green : .red
         let width: CGFloat = selectedID == candidate.id ? 4 : 2
-        return Image(decorative: candidate.cgImage, scale: 1)
-            .resizable()
-            .aspectRatio(1, contentMode: .fit)
-            .background(Color.white)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(colour, lineWidth: width))
-            .onTapGesture { select(candidate) }
+        return VStack(spacing: 2) {
+            Image(decorative: candidate.cgImage, scale: 1)
+                .resizable()
+                .aspectRatio(1, contentMode: .fit)
+                .background(Color.white)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(colour, lineWidth: width))
+            Text(String(format: "%.2f", candidate.report.score))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(candidate.ok ? .primary : .secondary)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { select(candidate) }
     }
 
     private func select(_ candidate: Candidate) {
         selectedID = candidate.id
-        log(String(format: "候補 %d を選択（透過 %.0f%%・seed %llu）",
-                   candidate.id + 1, candidate.transparency * 100, candidate.seed))
+        let report = candidate.report
+        log(String(format: "候補 %d を選択（形 %.2f・塊 %d・散り %.2f・粗さ %.2f・seed %llu）",
+                   candidate.id + 1, report.score, report.parts, report.stray,
+                   report.rough, candidate.seed))
         saveForInspection(candidate.processed, name: "latest.png")
     }
 
@@ -212,8 +228,10 @@ struct ContentView: View {
         do {
             let pipeline = try await preparedPipeline()
             let env = ProcessInfo.processInfo.environment
-            // 生成条件は Mac 側スイープで確定した値を既定にし、実験用に環境変数で上書き可
-            let steps = Int(env["ICON_STEPS"] ?? "") ?? 4
+            // 生成条件は Mac 側の比較で確定した値を既定にし、実験用に環境変数で上書き可。
+            // 8 步にしたのは形の採点で 4 步に勝ったから（96 枚ずつ・seed 2 通りの両方で
+            // 平均 0.399 -> 0.493）。1 枚あたりの時間は倍になるが、形の当たりが増える
+            let steps = Int(env["ICON_STEPS"] ?? "") ?? 8
             let guidance = Float(env["ICON_GUIDANCE"] ?? "") ?? 1.0
             log("生成中…（\(steps) ステップ / guidance \(guidance)）")
 
@@ -227,30 +245,27 @@ struct ContentView: View {
                     seed: seed
                 )
                 let generated = try await pipeline.generateIcon(subject: subject, options: options)
-                let result = IconPostprocess.process(generated)
-                guard let cgImage = result.image.makeAlphaCGImage() else { continue }
-                let candidate = Candidate(id: index, raw: generated, processed: result.image,
-                                          cgImage: cgImage, transparency: result.transparency,
-                                          seed: seed)
+                let transparent = IconPostprocess.process(generated)
+                let polished = IconShapes.polish(transparent.image, size: outputSize)
+                guard let cgImage = polished.image.makeAlphaCGImage() else { continue }
+                let candidate = Candidate(id: index, raw: generated, processed: polished.image,
+                                          cgImage: cgImage, transparency: transparent.transparency,
+                                          report: polished.report, seed: seed)
                 candidates.append(candidate)
-                log(String(format: "候補 %d: %@（透過 %.0f%%）", index + 1,
-                           candidate.ok ? "合格" : "不合格", result.transparency * 100))
-                saveForInspection(result.image, name: "candidate\(index + 1).png")
+                log(String(format: "候補 %d: %@（形 %.2f・透過 %.0f%%）", index + 1,
+                           candidate.ok ? "合格" : "不合格", polished.report.score,
+                           transparent.transparency * 100))
+                saveForInspection(polished.image, name: "candidate\(index + 1).png")
             }
 
             let passed = candidates.filter(\.ok)
             log(String(format: "完了 %.1f 秒。機械判定 %d/%d 通過",
                        Date().timeIntervalSince(started), passed.count, candidates.count))
-            if ProcessInfo.processInfo.environment["ICON_AUTO"] == "generate" {
-                // 無人実行では人が選べない。**透過率最大を選んではいけない**（ほぼ空の
-                // 絵が勝ってしまう。実機で確認済み）。学習データの被写体占有率は約 70% =
-                // 透過率 0.55〜0.75 相当なので、0.7 に最も近いものを採用する
-                let target = 0.7
-                let pool = passed.isEmpty ? candidates : passed
-                let choice = pool.min(by: {
-                    abs($0.transparency - target) < abs($1.transparency - target)
-                })
-                if let choice { select(choice) }
+            // 形の点が最も高い候補を先に選んでおく（人はタップで変えられる）。
+            // 以前は透過率が 0.7 に近いものを選んでいたが、透過率は形を何も見て
+            // いないので、断片が散った絵が勝つことがあった
+            if let best = candidates.max(by: { $0.report.score < $1.report.score }) {
+                select(best)
             }
         } catch {
             log("失敗: \(error.localizedDescription)")

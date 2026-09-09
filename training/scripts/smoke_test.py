@@ -286,6 +286,21 @@ def main(argv: list[str] | None = None) -> int:
         assert all(record["transparent"] for record in images), "透過フラグが立っていない"
         print(f"   ✓ manifest: {len(images)} 枚, seed={[r['seed'] for r in images]}")
 
+        run("generate: 形の整形（--polish）と採点",
+            ["scripts/generate.py", "--config", str(config), "--count", "1",
+             "--subjects", "a coffee cup", "--polish", "--polish-size", "128",
+             "--out", str(root / "polished"), "--no-sheet"])
+        polished = json.loads((root / "polished" / "manifest.json").read_text(encoding="utf-8"))
+        shape = polished["images"][0]["shape"]
+        assert shape is not None, "--polish なのに採点が記録されていない"
+        assert 0.0 <= shape["score"] <= 1.0, f"点が範囲外: {shape}"
+        from PIL import Image as _Image
+        with _Image.open(root / "polished" / polished["images"][0]["file"]) as image:
+            assert image.size == (128, 128), f"--polish-size が効いていない: {image.size}"
+            assert image.mode == "RGBA", f"整形後は RGBA のはず: {image.mode}"
+        print(f"   ✓ 整形: {image.size[0]}px 形の点 {shape['score']:.2f} "
+              f"（塊 {shape['parts']} / 粗さ {shape['rough']:.2f}）")
+
         run("Stage 4: LoRA の焼き込み＋前後比較",
             ["scripts/04_fuse_lora.py", "--config", str(config)])
         expect(root / "fused" / "model_index.json", "fused/model_index.json")

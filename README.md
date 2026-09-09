@@ -42,7 +42,8 @@ python scripts/smoke_test.py                       # 配管の確認（数秒・
 python scripts/01_prepare_dataset.py --input ~/icons_raw
 ./scripts/02_train_lora.sh
 python scripts/03_preview_lcm.py --sweep-style 0.4 0.6 0.8 1.0
-python scripts/generate.py --prompts prompts.example.txt --count 4 --transparent
+python scripts/generate.py --prompts prompts.example.txt --count 4 --polish
+python scripts/score_shapes.py outputs/generated   # 形の点で設定を比べる
 ```
 
 ### 「完成」をどこで判定するか
@@ -104,7 +105,7 @@ Swift 側（`ios/IconDiffusionKit`）は先に書いてあるが、Core AI の A
 ```
 training/            Mac 側。ここだけでモデルは完成する
   configs/           全ステージが読む単一の設定ファイル
-  scripts/           01〜05 と generate.py
+  scripts/           01〜05 と generate.py / score_shapes.py
   src/icon_diffusion 各スクリプトが共有するロジック
   prompts.example.txt 生成する被写体のリスト
 ios/IconDiffusionKit Swift Package。端末に載せる段になってから

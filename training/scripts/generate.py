@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from PIL import Image  # noqa: E402
 
-from icon_diffusion import load_config, load_torch_stack  # noqa: E402
+from icon_diffusion import load_config, load_torch_stack, shapes  # noqa: E402
 from icon_diffusion.postprocess import (  # noqa: E402
     palette_purity,
     remove_flat_background,
@@ -106,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--snap-palette", action="store_true",
                         help="不透明画素をパレット（ネイビー/コーラル/白）へ量子化する。"
                              "--transparent の後に適用される。色のはみ出しを決定的に消す")
+    output.add_argument("--polish", action="store_true",
+                        help="形を整えて滑らかに描き直す（ゴミ取り・穴埋め・輪郭の平滑化 + "
+                             "パレット量子化）。--transparent を含む。--snap-palette は不要")
+    output.add_argument("--polish-size", type=int, default=None,
+                        help="整形後の解像度（既定は元のまま。1024 にすると拡大して書き出す）")
     output.add_argument("--tolerance", type=float, default=0.06, help="背景とみなす色差")
     output.add_argument("--feather", type=float, default=0.12, help="輪郭を半透明にする幅")
     output.add_argument("--no-sheet", action="store_true", help="コンタクトシートを作らない")
@@ -191,10 +196,15 @@ def main(argv: list[str] | None = None) -> int:
 
             alpha_ratio = None
             purity = None
-            if args.transparent:
+            report = None
+            if args.transparent or args.polish:
                 image = remove_flat_background(image, tolerance=args.tolerance, feather=args.feather)
                 alpha_ratio = transparency_ratio(image)
-            if args.snap_palette:
+            if args.polish:
+                # 整形は量子化を内側でやる。--snap-palette と併用しても壊れないが不要
+                image, report = shapes.polish(image, size=args.polish_size)
+                purity = palette_purity(image)
+            elif args.snap_palette:
                 image = snap_to_palette(image)
                 purity = palette_purity(image)
 
@@ -211,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
                     "guidance_scale": guidance,
                     "transparent": bool(args.transparent),
                     "transparency_ratio": alpha_ratio,
+                    "shape": report,
                     "seconds": round(elapsed, 2),
                 }
             )
@@ -218,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
             sheet_labels.append(f"{subject} #{variation + 1}")
 
             suffix = f" 透過={alpha_ratio:.0%}" if alpha_ratio is not None else ""
+            if report is not None:
+                suffix += f" 形={report['score']:.2f}"
             print(f"[gen] {name}  {elapsed:.1f}s{suffix}")
 
     if not args.no_sheet:

@@ -230,10 +230,11 @@ python scripts/generate.py --raw-prompts /tmp/no-trigger.txt --out outputs/check
 ## 5. 量産して合格を判定する
 
 ```bash
-python scripts/generate.py --prompts prompts.example.txt --count 4 --transparent
+python scripts/generate.py --prompts prompts.example.txt --count 4 --polish
 ```
 
-12 被写体 × 4 枚 = 48 枚が `outputs/generated/` に出る。
+12 被写体 × 4 枚 = 48 枚が `outputs/generated/` に出る。`--polish` は背景を抜いてから
+形を整え（ゴミ取り・穴埋め・輪郭の平滑化）、パレットへ量子化して描き直す。
 
 **合格ライン（プロジェクトの完成判定）**:
 
@@ -241,6 +242,17 @@ python scripts/generate.py --prompts prompts.example.txt --count 4 --transparent
 > 「そのままアイコンとして使える」なら合格。
 
 数えるだけでよい。落ちたら 4 の表に戻る。
+
+**機械の目でも測る**（人の判定の代わりではなく、設定を比べるときの物差し）:
+
+```bash
+python scripts/score_shapes.py outputs/generated
+```
+
+塗りの量・破片の散り・塊の数・輪郭の粗さから「形の点」を出す。1 枚ずつの点と、
+**被写体ごとの 4 枚の最良の平均**が出る。実際に人が見るのは 4 枚のうち一番良い 1 枚なので、
+体感に近いのは後者（2026-09-09 の b5 で 0.868）。**点は形の素直さしか見ておらず、
+それがコーヒーカップに見えるかは測れない。** 最後は必ず目で見ること。
 
 **あわせて確認する**:
 
