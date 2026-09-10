@@ -63,13 +63,25 @@ if [[ ! -f IconDiffusionApp.xcodeproj/project.pbxproj ]]; then
 fi
 
 echo "[install] ビルド中（約 1GB なので数分かかります）"
-"$XCODEBUILD" -project IconDiffusionApp.xcodeproj \
-  -scheme IconDiffusionApp \
-  -configuration Debug \
-  -destination "id=$DEVICE_ID" \
-  -allowProvisioningUpdates \
-  -derivedDataPath build \
-  build
+build_app() {
+  "$XCODEBUILD" -project IconDiffusionApp.xcodeproj \
+    -scheme IconDiffusionApp \
+    -configuration Debug \
+    -destination "id=$DEVICE_ID" \
+    -derivedDataPath build \
+    "$@" \
+    build
+}
+
+# 自動プロビジョニング（-allowProvisioningUpdates）は Xcode に Apple ID が
+# 登録されていないと "No Accounts" で落ちる。手元に有効な証明書とプロファイルが
+# 揃っていればポータルに問い合わせる必要はないので、その場合は付けずに通す。
+# **証明書は 1 年で切れる。** 切れた直後は下の再試行も失敗するので、
+# Xcode を開いて署名を作り直すこと（Xcode > Settings > Accounts）。
+if ! build_app -allowProvisioningUpdates; then
+  echo "[install] 自動プロビジョニングに失敗。手元のプロファイルで再試行します" >&2
+  build_app
+fi
 
 APP="build/Build/Products/Debug-iphoneos/IconDiffusionApp.app"
 [[ -d "$APP" ]] || { echo "ビルド成果物が見つかりません: $APP" >&2; exit 1; }
