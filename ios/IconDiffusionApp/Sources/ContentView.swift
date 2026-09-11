@@ -17,10 +17,12 @@ struct ContentView: View {
     struct Candidate: Identifiable {
         let id: Int
         let raw: GeneratedImage
-        let processed: GeneratedImage
-        let cgImage: CGImage
+        /// 背景を敷く前（透過のみ）。背景を切り替えるたびに拡散を回し直さずに済む
+        let transparent: GeneratedImage
+        var processed: GeneratedImage
+        var cgImage: CGImage
         let transparency: Double
-        let report: IconShapes.Report
+        var report: IconShapes.Report
         let seed: UInt64
         /// 合格 = 形の点が閾値以上。**背景が抜けたかではなく形で判定する**
         /// （透過率だけ見ていた頃は、ほぼ空の絵が「合格」になっていた）
@@ -28,6 +30,10 @@ struct ContentView: View {
     }
 
     @State private var subject = "a coffee cup"
+    /// 敷く背景。**SNS のアイコンは円に切り抜かれるので、透過のままだと
+    /// タイムラインの地の色に左右される。** auto は輪郭の色に対して WCAG 1.4.11 の
+    /// 3:1 を満たすパレット色を選ぶ
+    @State private var background = "auto"
     @State private var candidates: [Candidate] = []
     @State private var selectedID: Int?
     @State private var status = ""
@@ -48,6 +54,15 @@ struct ContentView: View {
             TextField("被写体（英語）", text: $subject)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
+
+            Picker("背景", selection: $background) {
+                Text("自動").tag("auto")
+                Text("白").tag("white")
+                Text("ネイビー").tag("navy")
+                Text("透過").tag("none")
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: background) { _, _ in restyleAll() }
 
             HStack(spacing: 12) {
                 Button(isBusy ? "生成中…" : "候補を \(candidateCount) 枚生成") {
@@ -154,12 +169,31 @@ struct ContentView: View {
         .onTapGesture { select(candidate) }
     }
 
+    /// 背景を変えたときに掛け直す。拡散は回さないので一瞬で終わる
+    private func restyleAll() {
+        candidates = candidates.map { candidate in
+            var updated = candidate
+            let polished = IconShapes.polish(candidate.transparent, size: outputSize,
+                                             background: background)
+            guard let cgImage = polished.image.makeAlphaCGImage() else { return candidate }
+            updated.processed = polished.image
+            updated.cgImage = cgImage
+            updated.report = polished.report
+            return updated
+        }
+        if let selected = candidates.first(where: { $0.id == selectedID }) {
+            saveForInspection(selected.processed, name: "latest.png")
+        }
+    }
+
     private func select(_ candidate: Candidate) {
         selectedID = candidate.id
         let report = candidate.report
-        log(String(format: "候補 %d を選択（形 %.2f・塊 %d・散り %.2f・粗さ %.2f・seed %llu）",
-                   candidate.id + 1, report.score, report.parts, report.stray,
-                   report.rough, candidate.seed))
+        let contrast = report.backgroundContrast.isFinite
+            ? String(format: "・地との差 %.1f:1", report.backgroundContrast) : ""
+        log(String(format: "候補 %d を選択（形 %.2f・塊 %d・粗さ %.2f%@・背景 %@・seed %llu）",
+                   candidate.id + 1, report.score, report.parts, report.rough,
+                   contrast, report.background, candidate.seed))
         saveForInspection(candidate.processed, name: "latest.png")
     }
 
@@ -246,9 +280,12 @@ struct ContentView: View {
                 )
                 let generated = try await pipeline.generateIcon(subject: subject, options: options)
                 let transparent = IconPostprocess.process(generated)
-                let polished = IconShapes.polish(transparent.image, size: outputSize)
+                let polished = IconShapes.polish(transparent.image, size: outputSize,
+                                                 background: background)
                 guard let cgImage = polished.image.makeAlphaCGImage() else { continue }
-                let candidate = Candidate(id: index, raw: generated, processed: polished.image,
+                let candidate = Candidate(id: index, raw: generated,
+                                          transparent: transparent.image,
+                                          processed: polished.image,
                                           cgImage: cgImage, transparency: transparent.transparency,
                                           report: polished.report, seed: seed)
                 candidates.append(candidate)

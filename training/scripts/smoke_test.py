@@ -289,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         run("generate: 形の整形（--polish）と採点",
             ["scripts/generate.py", "--config", str(config), "--count", "1",
              "--subjects", "a coffee cup", "--polish", "--polish-size", "128",
+             "--background", "navy",
              "--out", str(root / "polished"), "--no-sheet"])
         polished = json.loads((root / "polished" / "manifest.json").read_text(encoding="utf-8"))
         shape = polished["images"][0]["shape"]
@@ -298,8 +299,11 @@ def main(argv: list[str] | None = None) -> int:
         with _Image.open(root / "polished" / polished["images"][0]["file"]) as image:
             assert image.size == (128, 128), f"--polish-size が効いていない: {image.size}"
             assert image.mode == "RGBA", f"整形後は RGBA のはず: {image.mode}"
+            corner = image.convert("RGBA").getpixel((0, 0))
+            assert corner[3] == 255, f"背景を敷いたのに角が透過している: {corner}"
+            assert corner[:3] == (0x1F, 0x2A, 0x44), f"背景色が違う: {corner}"
         print(f"   ✓ 整形: {image.size[0]}px 形の点 {shape['score']:.2f} "
-              f"（塊 {shape['parts']} / 粗さ {shape['rough']:.2f}）")
+              f"（塊 {shape['parts']} / 粗さ {shape['rough']:.2f} / 背景 {shape['background']}）")
 
         run("Stage 4: LoRA の焼き込み＋前後比較",
             ["scripts/04_fuse_lora.py", "--config", str(config)])

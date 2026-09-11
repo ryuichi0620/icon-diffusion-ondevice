@@ -211,6 +211,7 @@ def render_smooth(
     size: int | None = None,
     blur: float = DEFAULT_BLUR,
     edge: float = 1.2,
+    fit: dict | None = None,
 ) -> Image.Image:
     """地図をぼかした濃度場に変えてから描き直す。**これが「滑らかな線」の本体。**
 
@@ -229,9 +230,17 @@ def render_smooth(
     """
     height, width = labels.shape
     size = size or width
-    ratio = size / width
-    # 濃度場 0.5 の等高線をまたぐ幅が edge 出力画素になるような傾き
-    slope = (2.5 * max(blur, 0.35) * ratio) / max(edge, 0.5)
+    scale = float(fit["scale"]) if fit else 1.0
+    ratio = size * scale / width
+    # 縮小するときは、縮めた後のぼけ幅が同じになるよう元解像度で強めにぼかす。
+    # そうしないと濃度場を間引くときに階段が戻る
+    source_blur = blur / min(scale, 1.0)
+    # 濃度場 0.5 の等高線をまたぐ幅が edge 出力画素になるような傾き。
+    # **1 を下回らせてはいけない。** 出力が元より小さいと境界は 1 画素未満で切り替わるため
+    # 式の値が 1 未満になり、そのまま使うと不透明度がどこも 0 にも 255 にもならず
+    # 全面が半透明の灰色になる（170px へ縮めて実際に出た）。傾き 1 は濃度場をそのまま
+    # 不透明度にすることに等しく、面積比のアンチエイリアスとして正しい
+    slope = max((2.5 * max(source_blur, 0.35) * ratio) / max(edge, 0.5), 1.0)
 
     pieces: list[tuple[int, int, np.ndarray]] = []
     for value in range(len(PALETTE)):
@@ -240,8 +249,20 @@ def render_smooth(
             continue
         field = Image.fromarray((mask * 255).astype(np.uint8), "L")
         if blur > 0:
-            field = field.filter(ImageFilter.GaussianBlur(blur))
-        field = field.resize((size, size), Image.BILINEAR)
+            field = field.filter(ImageFilter.GaussianBlur(source_blur))
+        if fit is None:
+            field = field.resize((size, size), Image.BILINEAR)
+        else:
+            # 視覚重心を画面の中心へ持ってきつつ、倍率を掛ける。
+            # 出力 (x, y) -> 元画像 (a*x + c, e*y + f) の対応で書く
+            centre_x, centre_y = fit["center"]
+            a = width / (size * scale)
+            e = height / (size * scale)
+            field = field.transform(
+                (size, size), Image.AFFINE,
+                (a, 0, centre_x - a * size / 2, 0, e, centre_y - e * size / 2),
+                resample=Image.BILINEAR,
+            )
         alpha = np.clip((np.asarray(field, dtype=np.float32) / 255.0 - 0.5) * slope + 0.5, 0.0, 1.0)
         pieces.append((int(mask.sum()), value, alpha))
 
@@ -341,15 +362,45 @@ def polish(
     open_radius: int = DEFAULT_OPEN,
     blur: float = DEFAULT_BLUR,
     edge: float = 1.2,
+    fit: bool = True,
+    background: str = "none",
 ) -> tuple[Image.Image, dict]:
     """透過済みの画像を「整えて滑らかに描き直し」、同時に採点する。
 
     `remove_flat_background()` の**後**に呼ぶこと。量子化はこの中でやるので
     `snap_to_palette()` を別に呼ぶ必要はない（二重に掛けても壊れはしない）。
+
+    `fit` は円クロップへの対応（視覚重心で中央に寄せ、光学的な大きさを揃える）。
+    `background` は敷く色（`auto` で最もコントラストの立つ色を選ぶ）。どちらも
+    icon_fit.py 参照。**採点は変形の前に行う** — 変形は「塗りが薄い」「中心から
+    ずれている」といった欠点を見かけ上つぶしてしまうので、それでは絵の善し悪しを
+    測れなくなる。
     """
+    from . import icon_fit  # noqa: PLC0415  循環参照を避ける
+
     mush = mush_ratio(image)
     labels = to_labels(image)
     cleaned = clean_labels(labels, min_area=min_area, min_hole=min_hole,
                            open_radius=open_radius)
     report = shape_report(cleaned, mush=mush)
-    return render_smooth(cleaned, size=size, blur=blur, edge=edge), report
+    report.update(icon_fit.legibility_report(cleaned))
+
+    drawn = cleaned
+    plan = None
+    if fit:
+        # 背景の切れ端を落としてから測って描く。採点は落とす前の地図で済ませてある
+        drawn = icon_fit.drop_scraps(cleaned)
+        plan = icon_fit.plan_fit(drawn)
+        report["outside_before"] = plan["outside_before"]
+        report["fit_scale"] = plan["scale"]
+        report["scraps"] = float((cleaned >= 0).sum() - (drawn >= 0).sum()) / \
+            max(float((cleaned >= 0).sum()), 1.0)
+    rendered = render_smooth(drawn, size=size, blur=blur, edge=edge, fit=plan)
+
+    if background == "auto":
+        background = icon_fit.choose_background(drawn)
+    report["background"] = background
+    if background != "none":
+        # 輪郭の色と背景色のコントラスト比。WCAG 1.4.11 は図形に 3:1 を求める
+        report["background_contrast"] = icon_fit.background_contrast(drawn, background)
+    return icon_fit.compose_background(rendered, background), report

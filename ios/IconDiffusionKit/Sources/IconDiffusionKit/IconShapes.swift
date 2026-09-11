@@ -33,6 +33,12 @@ public enum IconShapes {
         public var mush: Double
         public var margin: Double
         public var symmetry: Double
+        /// 整形前に内接円からはみ出していた塗りの割合（円クロップで切れていた量）
+        public var outsideBefore: Double = 0
+        /// 敷いた背景の名前。"none" なら透過のまま
+        public var background: String = "none"
+        /// 輪郭の色と背景色の最小コントラスト比。WCAG 1.4.11 は 3:1 以上を求める
+        public var backgroundContrast: Double = .infinity
     }
 
     public struct Polished {
@@ -44,17 +50,44 @@ public enum IconShapes {
 
     /// 透過済みの画像を整えて描き直し、同時に採点する。
     /// `IconPostprocess.process()` の**後**に呼ぶこと（背景が残っていると全面が絵になる）。
+    /// `fit` は円クロップへの整形（切れ端を落とし、視覚重心へ寄せ、大きさを揃える）。
+    /// `background` は敷く色（`auto` で 3:1 を満たすパレット色を選ぶ）。
+    /// **採点は整形の前に行う** — 整形は「塗りが薄い」「中心からずれている」といった欠点を
+    /// 見かけ上つぶすので、後で測ると絵の善し悪しが分からなくなる。
     public static func polish(_ image: GeneratedImage,
                        size: Int? = nil,
                        blur: Double = defaultBlur,
-                       edge: Double = 1.2) -> Polished {
+                       edge: Double = 1.2,
+                       fit: Bool = true,
+                       background: String = "none") -> Polished {
         let width = image.width, height = image.height
         let labels = labelMap(image)
         let mush = mushRatio(image)
         let cleaned = clean(labels, width: width, height: height)
-        let report = self.report(cleaned, width: width, height: height, mush: mush)
-        let rendered = render(cleaned, width: width, height: height,
-                              size: size ?? width, blur: blur, edge: edge)
+        var report = self.report(cleaned, width: width, height: height, mush: mush)
+
+        var drawn = cleaned
+        var plan: IconFit.Plan?
+        if fit {
+            drawn = IconFit.dropScraps(cleaned, width: width, height: height)
+            let made = IconFit.plan(drawn, width: width, height: height)
+            report.outsideBefore = made.outsideBefore
+            plan = made
+        }
+
+        var rendered = render(drawn, width: width, height: height,
+                              size: size ?? width, blur: blur, edge: edge, plan: plan)
+
+        var chosen = background
+        if background == "auto" {
+            chosen = IconFit.chooseBackground(drawn, width: width, height: height)
+        }
+        report.background = chosen
+        if chosen != "none" {
+            report.backgroundContrast = IconFit.backgroundContrast(
+                drawn, width: width, height: height, background: chosen)
+            rendered = IconFit.compose(rendered, background: chosen)
+        }
         return Polished(image: rendered, report: report)
     }
 
@@ -373,9 +406,16 @@ public enum IconShapes {
     /// 切り直すと、階段だけが消えて角は角のまま残る。拡大は**二値化する前の濃度場に対して**
     /// 行うので、出力を 1024px にしても輪郭が階段状にならない。
     static func render(_ labels: [Int8], width: Int, height: Int,
-                       size: Int, blur: Double, edge: Double) -> GeneratedImage {
-        let ratio = Double(size) / Double(width)
-        let slope = (2.5 * max(blur, 0.35) * ratio) / max(edge, 0.5)
+                       size: Int, blur: Double, edge: Double,
+                       plan: IconFit.Plan? = nil) -> GeneratedImage {
+        let scale = plan?.scale ?? 1.0
+        let ratio = Double(size) * scale / Double(width)
+        // 縮小するときは、縮めた後のぼけ幅が同じになるよう元解像度で強めにぼかす
+        let sourceBlur = blur / min(scale, 1.0)
+        // **傾きを 1 未満にしてはいけない。** 出力が元より小さいと境界は 1 画素未満で
+        // 切り替わるため式の値が 1 を下回り、不透明度がどこも 0 にも 255 にもならず
+        // 全面が半透明の灰色になる（Mac 側で 170px へ縮めて実際に出した）
+        let slope = max((2.5 * max(sourceBlur, 0.35) * ratio) / max(edge, 0.5), 1.0)
 
         var pieces: [(area: Int, value: Int, alpha: [Float])] = []
         for value in 0..<palette.count {
@@ -386,8 +426,10 @@ public enum IconShapes {
                 area += 1
             }
             if area == 0 { continue }
-            if blur > 0 { field = gaussianBlur(field, width: width, height: height, sigma: blur) }
-            let scaled = bilinear(field, width: width, height: height, size: size)
+            if blur > 0 {
+                field = gaussianBlur(field, width: width, height: height, sigma: sourceBlur)
+            }
+            let scaled = resample(field, width: width, height: height, size: size, plan: plan)
             let alpha = scaled.map { value -> Float in
                 Float(min(max((Double(value) - 0.5) * slope + 0.5, 0.0), 1.0))
             }
@@ -471,23 +513,38 @@ public enum IconShapes {
         return vertical
     }
 
-    /// 双一次補間で拡大する。標本位置は Pillow と同じ「画素の中心」の流儀に合わせてある。
-    private static func bilinear(_ field: [Float], width: Int, height: Int,
-                                 size: Int) -> [Float] {
-        if size == width && size == height { return field }
+    /// 双一次補間で拡大・移動する。標本位置は Pillow と同じ「画素の中心」の流儀。
+    /// `plan` があるときは、視覚重心を画面の中心へ持ってきつつ倍率を掛ける。
+    private static func resample(_ field: [Float], width: Int, height: Int,
+                                 size: Int, plan: IconFit.Plan?) -> [Float] {
+        if plan == nil && size == width && size == height { return field }
         var out = [Float](repeating: 0, count: size * size)
-        let scaleX = Double(width) / Double(size)
-        let scaleY = Double(height) / Double(size)
+        var scaleX = Double(width) / Double(size)
+        var scaleY = Double(height) / Double(size)
+        var shiftX = 0.0, shiftY = 0.0
+        if let plan {
+            scaleX = Double(width) / (Double(size) * plan.scale)
+            scaleY = Double(height) / (Double(size) * plan.scale)
+            shiftX = plan.centerX - scaleX * Double(size) / 2
+            shiftY = plan.centerY - scaleY * Double(size) / 2
+        }
         for y in 0..<size {
-            let sourceY = (Double(y) + 0.5) * scaleY - 0.5
+            let sourceY = plan == nil ? (Double(y) + 0.5) * scaleY - 0.5
+                                      : Double(y) * scaleY + shiftY
             let y0 = Int(floor(sourceY))
             let fy = Float(sourceY - Double(y0))
             let row0 = min(max(y0, 0), height - 1) * width
             let row1 = min(max(y0 + 1, 0), height - 1) * width
             for x in 0..<size {
-                let sourceX = (Double(x) + 0.5) * scaleX - 0.5
+                let sourceX = plan == nil ? (Double(x) + 0.5) * scaleX - 0.5
+                                          : Double(x) * scaleX + shiftX
                 let x0 = Int(floor(sourceX))
                 let fx = Float(sourceX - Double(x0))
+                if plan != nil && (sourceX < -1 || sourceX > Double(width)
+                                   || sourceY < -1 || sourceY > Double(height)) {
+                    out[y * size + x] = 0   // 変形で画面外に出た先は塗り無し
+                    continue
+                }
                 let c0 = min(max(x0, 0), width - 1)
                 let c1 = min(max(x0 + 1, 0), width - 1)
                 let top = field[row0 + c0] * (1 - fx) + field[row0 + c1] * fx
@@ -496,5 +553,235 @@ public enum IconShapes {
             }
         }
         return out
+    }
+}
+
+/// SNS アイコンとして成立させるための整えと検査。
+/// **training/src/icon_diffusion/icon_fit.py の移植で、あちらが参照実装。**
+///
+/// SNS のプロフィール画像はほぼ例外なく**円形に切り抜かれ**、タイムラインでは 48px 前後まで
+/// 縮む。効く基準は 3 つで、どれも機械で測れる。
+///
+/// 1. **円クロップの安全領域** — 正方形の四隅は必ず切れる。b5 の出力は 21%（10/48）が
+///    内接円からはみ出していた（最大 28.6%）
+/// 2. **隣接色とのコントラスト** — WCAG 2.1 の 1.4.11 は図形に 3:1 を求める。
+///    **このパレットではコーラル×白が 2.82:1 で未達**。白地に置くとタイムラインで沈む
+/// 3. **小サイズでの判別** — 48px で線が消えないか
+public enum IconFit {
+    /// 内接円の内側にどれだけ余白を残すか
+    public static let safeRatio = 0.92
+    /// 何割の塗りを安全領域に収めるか。**1.0 にしてはいけない** —
+    /// 細い先端が 1 本はみ出しているだけで全体が 6 割に縮む（Mac 側で実測）
+    public static let safeQuantile = 0.98
+    public static let maxCoverage = 0.50
+    public static let scaleLimits = (low: 0.55, high: 1.60)
+    /// 端に触れている塊のうち、これ未満なら背景の切れ端とみなす
+    public static let scrapShare = 0.15
+
+    public struct Plan {
+        public var scale: Double
+        public var centerX: Double
+        public var centerY: Double
+        public var outsideBefore: Double
+    }
+
+    // MARK: - コントラスト
+
+    public static func relativeLuminance(_ colour: (r: Double, g: Double, b: Double)) -> Double {
+        func channel(_ value: Double) -> Double {
+            let v = value / 255.0
+            return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(colour.r) + 0.7152 * channel(colour.g) + 0.0722 * channel(colour.b)
+    }
+
+    public static func contrastRatio(_ a: (r: Double, g: Double, b: Double),
+                                     _ b: (r: Double, g: Double, b: Double)) -> Double {
+        let la = relativeLuminance(a), lb = relativeLuminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
+    /// 敷ける背景。**#121212 はパレット外なので最後の逃げ道**（純黒を避けるのは
+    /// 暗所でのハレーション対策。参照実装と同じ値）
+    public static let backgrounds: [(name: String, colour: (r: Double, g: Double, b: Double))] = [
+        ("white", (255, 255, 255)),
+        ("navy", (0x1F, 0x2A, 0x44)),
+        ("coral", (0xFF, 0x6B, 0x4A)),
+        ("dark", (0x12, 0x12, 0x12)),
+    ]
+
+    /// 背景に接している色。**面積ではなく輪郭の長さで数える。**
+    /// WCAG が求めるのは隣接色との比なので、内側の白（カップの中など）は数えない。
+    static func silhouetteColours(_ labels: [Int8], width: Int, height: Int,
+                                  minShare: Double = 0.10) -> [Int] {
+        var edgeCount = [Int](repeating: 0, count: IconShapes.palette.count)
+        var total = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                let index = y * width + x
+                let value = labels[index]
+                guard value >= 0 else { continue }
+                var touches = false
+                if x > 0 { touches = touches || labels[index - 1] < 0 }
+                if x < width - 1 { touches = touches || labels[index + 1] < 0 }
+                if y > 0 { touches = touches || labels[index - width] < 0 }
+                if y < height - 1 { touches = touches || labels[index + width] < 0 }
+                if touches { edgeCount[Int(value)] += 1; total += 1 }
+            }
+        }
+        guard total > 0 else {
+            return (0..<IconShapes.palette.count).filter { value in
+                labels.contains(Int8(value))
+            }
+        }
+        return (0..<IconShapes.palette.count)
+            .filter { Double(edgeCount[$0]) / Double(total) >= minShare }
+    }
+
+    public static func backgroundContrast(_ labels: [Int8], width: Int, height: Int,
+                                          background: String) -> Double {
+        guard let entry = backgrounds.first(where: { $0.name == background }) else {
+            return .infinity
+        }
+        let colours = silhouetteColours(labels, width: width, height: height)
+        guard !colours.isEmpty else { return .infinity }
+        return colours.map { value -> Double in
+            let ink = IconShapes.palette[value]
+            return contrastRatio((ink.r, ink.g, ink.b), entry.colour)
+        }.min() ?? .infinity
+    }
+
+    /// 3:1 を満たす背景のうち、**パレット内で最初に見つかったもの**。
+    /// コントラスト最大で選ぶと大半が #121212 になり、パレット外の色で一貫性が崩れる。
+    public static func chooseBackground(_ labels: [Int8], width: Int, height: Int) -> String {
+        guard labels.contains(where: { $0 >= 0 }) else { return "white" }
+        for name in ["white", "navy", "coral"] where
+            backgroundContrast(labels, width: width, height: height, background: name) >= 3.0 {
+            return name
+        }
+        return backgrounds
+            .map { ($0.name, backgroundContrast(labels, width: width, height: height,
+                                                background: $0.name)) }
+            .max(by: { $0.1 < $1.1 })?.0 ?? "white"
+    }
+
+    // MARK: - 切れ端の除去と大きさ揃え
+
+    /// 背景の切れ端（端に触れていて、小さいか、円クロップでほぼ消える塊）を透過に落とす。
+    /// **採点は落とす前に行うこと** — 切れ端があること自体が絵の欠点なので、
+    /// 消してから採点すると下手な絵が上手に見えてしまう。
+    public static func dropScraps(_ labels: [Int8], width: Int, height: Int) -> [Int8] {
+        let ink = labels.map { $0 >= 0 }
+        let (components, count) = IconShapes.labelComponents(ink, width: width, height: height)
+        guard count > 1 else { return labels }
+
+        var areas = [Int](repeating: 0, count: count + 1)
+        var inside = [Int](repeating: 0, count: count + 1)
+        let centre = (Double(width - 1) / 2, Double(height - 1) / 2)
+        let radius = Double(width) / 2
+        for y in 0..<height {
+            for x in 0..<width {
+                let label = Int(components[y * width + x])
+                guard label != 0 else { continue }
+                areas[label] += 1
+                let dx = Double(x) - centre.0, dy = Double(y) - centre.1
+                if (dx * dx + dy * dy).squareRoot() <= radius { inside[label] += 1 }
+            }
+        }
+        let total = Double(areas.dropFirst().reduce(0, +))
+
+        var touching = Set<Int32>()
+        for x in 0..<width {
+            touching.insert(components[x])
+            touching.insert(components[(height - 1) * width + x])
+        }
+        for y in 0..<height {
+            touching.insert(components[y * width])
+            touching.insert(components[y * width + width - 1])
+        }
+
+        var scrap = [Bool](repeating: false, count: count + 1)
+        for label in touching where label != 0 {
+            let small = Double(areas[Int(label)]) / total < scrapShare
+            let cropped = Double(inside[Int(label)]) / Double(max(areas[Int(label)], 1)) < 0.5
+            if small || cropped { scrap[Int(label)] = true }
+        }
+        guard scrap.contains(true) else { return labels }
+
+        var cleaned = labels
+        var remaining = 0
+        for index in 0..<labels.count where scrap[Int(components[index])] {
+            cleaned[index] = -1
+        }
+        for value in cleaned where value >= 0 { remaining += 1; _ = value }
+        return remaining > 0 ? cleaned : labels
+    }
+
+    /// 円クロップの安全領域に収まるよう、視覚重心へ寄せて大きさを揃える変形を決める。
+    /// 基準は**塗りの 98% が入る半径**。全画素を円内に入れようとすると余白だらけになる。
+    public static func plan(_ labels: [Int8], width: Int, height: Int) -> Plan {
+        let ink = labels.map { $0 >= 0 }
+        guard ink.contains(true) else {
+            return Plan(scale: 1, centerX: Double(width - 1) / 2,
+                        centerY: Double(height - 1) / 2, outsideBefore: 0)
+        }
+        // 切れ端は呼び出し側で落としてある前提。ここでは残った塗り全体を主役とみなす
+        var sumX = 0.0, sumY = 0.0, area = 0.0
+        for y in 0..<height {
+            for x in 0..<width where ink[y * width + x] {
+                sumX += Double(x); sumY += Double(y); area += 1
+            }
+        }
+        let centreX = sumX / area, centreY = sumY / area
+
+        var distances: [Double] = []
+        distances.reserveCapacity(Int(area))
+        var outside = 0.0
+        let canvasCentre = (Double(width - 1) / 2, Double(height - 1) / 2)
+        for y in 0..<height {
+            for x in 0..<width where ink[y * width + x] {
+                let dx = Double(x) - centreX, dy = Double(y) - centreY
+                distances.append((dx * dx + dy * dy).squareRoot())
+                let cx = Double(x) - canvasCentre.0, cy = Double(y) - canvasCentre.1
+                if (cx * cx + cy * cy).squareRoot() > Double(width) / 2 { outside += 1 }
+            }
+        }
+        distances.sort()
+        let position = safeQuantile * Double(distances.count - 1)
+        let lower = Int(position)
+        let upper = min(lower + 1, distances.count - 1)
+        let reach = distances[lower] + (position - Double(lower)) * (distances[upper] - distances[lower])
+
+        let safeRadius = Double(width) / 2 * safeRatio
+        var scale = safeRadius / max(reach, 1e-6)
+        let coverage = area * scale * scale / Double(width * height)
+        if coverage > maxCoverage { scale *= (maxCoverage / coverage).squareRoot() }
+        scale = min(max(scale, scaleLimits.low), scaleLimits.high)
+
+        return Plan(scale: scale, centerX: centreX, centerY: centreY,
+                    outsideBefore: outside / area)
+    }
+}
+
+
+extension IconFit {
+    /// 単色背景を敷く。**透過のままにしないのは、タイムラインの地の色に左右されないため。**
+    /// SNS 側が円に切り抜くので、背景は正方形いっぱいに塗る。
+    public static func compose(_ image: GeneratedImage, background: String) -> GeneratedImage {
+        guard let entry = backgrounds.first(where: { $0.name == background }) else { return image }
+        let base = (UInt8(entry.colour.r), UInt8(entry.colour.g), UInt8(entry.colour.b))
+        var rgba = image.rgba
+        for index in 0..<(image.width * image.height) {
+            let offset = index * 4
+            let alpha = Double(rgba[offset + 3]) / 255.0
+            if alpha >= 1.0 { continue }
+            for channel in 0..<3 {
+                let ink = Double(rgba[offset + channel]) * alpha
+                let under = Double(channel == 0 ? base.0 : (channel == 1 ? base.1 : base.2))
+                rgba[offset + channel] = UInt8(min(max((ink + under * (1 - alpha)).rounded(), 0), 255))
+            }
+            rgba[offset + 3] = 255
+        }
+        return GeneratedImage(width: image.width, height: image.height, rgba: rgba)
     }
 }

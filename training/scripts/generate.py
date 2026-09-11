@@ -109,6 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--polish", action="store_true",
                         help="形を整えて滑らかに描き直す（ゴミ取り・穴埋め・輪郭の平滑化 + "
                              "パレット量子化）。--transparent を含む。--snap-palette は不要")
+    output.add_argument("--background", default="none",
+                        choices=["none", "auto", "white", "navy", "coral", "dark"],
+                        help="敷く背景。SNS のアイコンは円に切り抜かれるので、透過のままだと"
+                             "タイムラインの地の色に左右される。auto は輪郭の色に対して"
+                             "WCAG 1.4.11 の 3:1 を満たす色を選ぶ（--polish と併用）")
+    output.add_argument("--no-fit", action="store_true",
+                        help="円クロップへの整形（視覚重心へ寄せ、大きさを揃える）をしない")
     output.add_argument("--polish-size", type=int, default=None,
                         help="整形後の解像度（既定は元のまま。1024 にすると拡大して書き出す）")
     output.add_argument("--tolerance", type=float, default=0.06, help="背景とみなす色差")
@@ -202,7 +209,9 @@ def main(argv: list[str] | None = None) -> int:
                 alpha_ratio = transparency_ratio(image)
             if args.polish:
                 # 整形は量子化を内側でやる。--snap-palette と併用しても壊れないが不要
-                image, report = shapes.polish(image, size=args.polish_size)
+                image, report = shapes.polish(image, size=args.polish_size,
+                                              fit=not args.no_fit,
+                                              background=args.background)
                 purity = palette_purity(image)
             elif args.snap_palette:
                 image = snap_to_palette(image)
@@ -231,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
             suffix = f" 透過={alpha_ratio:.0%}" if alpha_ratio is not None else ""
             if report is not None:
                 suffix += f" 形={report['score']:.2f}"
+                if report.get("background", "none") != "none":
+                    suffix += f" 背景={report['background']}"
             print(f"[gen] {name}  {elapsed:.1f}s{suffix}")
 
     if not args.no_sheet:
