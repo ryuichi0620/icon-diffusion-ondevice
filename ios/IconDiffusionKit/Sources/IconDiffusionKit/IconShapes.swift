@@ -529,15 +529,17 @@ public enum IconShapes {
             shiftY = plan.centerY - scaleY * Double(size) / 2
         }
         for y in 0..<size {
+            // Pillow の Image.transform は画素の中心を標本する（source = a*(x+0.5) + c - 0.5）。
+            // ここを整数座標のままにすると参照実装と半画素ずれる（実測で alpha 最大差 143）
             let sourceY = plan == nil ? (Double(y) + 0.5) * scaleY - 0.5
-                                      : Double(y) * scaleY + shiftY
+                                      : (Double(y) + 0.5) * scaleY + shiftY - 0.5
             let y0 = Int(floor(sourceY))
             let fy = Float(sourceY - Double(y0))
             let row0 = min(max(y0, 0), height - 1) * width
             let row1 = min(max(y0 + 1, 0), height - 1) * width
             for x in 0..<size {
                 let sourceX = plan == nil ? (Double(x) + 0.5) * scaleX - 0.5
-                                          : Double(x) * scaleX + shiftX
+                                          : (Double(x) + 0.5) * scaleX + shiftX - 0.5
                 let x0 = Int(floor(sourceX))
                 let fx = Float(sourceX - Double(x0))
                 if plan != nil && (sourceX < -1 || sourceX > Double(width)
