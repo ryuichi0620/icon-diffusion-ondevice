@@ -171,6 +171,11 @@ def load_config(path: str | Path | None = None) -> Config:
             seed=int(train_raw.get("seed", 42)),
             mixed_precision=str(train_raw.get("mixed_precision", "no")),
             checkpointing_steps=int(train_raw.get("checkpointing_steps", 200)),
+            lr_scheduler=str(train_raw.get("lr_scheduler", "constant")),
+            lr_warmup_steps=int(train_raw.get("lr_warmup_steps", 0)),
+            noise_offset=float(train_raw.get("noise_offset", 0.0)),
+            snr_gamma=(None if train_raw.get("snr_gamma") is None
+                       else float(train_raw["snr_gamma"])),
         ),
         preview=PreviewConfig(
             output_dir=resolve(preview_raw.get("output_dir", "outputs/preview")),
