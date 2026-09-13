@@ -119,6 +119,19 @@ def main() -> int:
         if not args.inputs:
             return 0
 
+    def subject_of(stem: str) -> str | None:
+        """ファイル名から被写体を引く。
+
+        `--raw-prompts` で生成すると、ファイル名が展開後のプロンプト全体（40 字で切り詰め）
+        になるので、単純な「末尾の連番を落とす」では引けない。
+        **最も長く一致するラベル**を探す（`a cup` と `a coffee cup` を取り違えないため）。
+        """
+        plain = re.sub(r"_\d+$", "", stem).replace("-", " ")
+        if plain in position:
+            return plain
+        hits = [label for label in position if label.replace("a ", "").replace("an ", "") in plain]
+        return max(hits, key=len) if hits else None
+
     results: dict[str, dict[str, bool]] = {}
     for source in args.inputs:
         directory = Path(source)
@@ -126,10 +139,10 @@ def main() -> int:
         for file in sorted(directory.glob("*.png")):
             if file.stem.startswith("contact"):
                 continue
-            subject = re.sub(r"_\d+$", "", file.stem).replace("-", " ")
-            if subject not in position:
+            subject = subject_of(file.stem)
+            if subject is None:
                 continue
-            marks[file.stem] = labels[judge(file)] == subject
+            marks[subject + file.stem[-3:]] = labels[judge(file)] == subject
         results[directory.name] = marks
         hits = sum(marks.values())
         print(f"[judge] {directory.name}: {hits}/{len(marks)} = "
