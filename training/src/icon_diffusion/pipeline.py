@@ -64,6 +64,7 @@ def attach_loras(
     style_lora_dir: str | Path | None = None,
     style_weight: float = 0.8,
     lcm_weight: float = 1.0,
+    style_blocks: dict | None = None,
 ) -> list[str]:
     """高速化 LoRA（既製）と スタイル LoRA（自作）を重ねる。
 
@@ -87,6 +88,16 @@ def attach_loras(
             "       高速化 LoRA だけで生成します（Stage 2 未実行？）"
         )
 
+    if style_blocks and "icon" in adapters:
+        # ブロック別にスタイルの効きを変える。**再学習が要らない。**
+        # スタイル LoRA は attn1/attn2 の両方に入っており、attn2 は
+        # テキストと画像を結ぶ層なので、スタイルを教えるつもりで被写体語の
+        # 意味結線まで書き換えている。down（構図側）を弱めて up（色・質感側）を
+        # 残せる（InstantStyle / LoRA block weight の知見）
+        weights = [
+            {"unet": dict(style_blocks)} if name == "icon" else weight
+            for name, weight in zip(adapters, weights)
+        ]
     pipe.set_adapters(adapters, adapter_weights=weights)
     return adapters
 

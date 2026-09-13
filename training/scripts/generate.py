@@ -90,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
     model.add_argument("--model", default=None, help="焼き込み済みパイプライン（既定はベース＋LoRA）")
     model.add_argument("--lora-dir", default=None, help="スタイル LoRA のディレクトリ")
     model.add_argument("--style-weight", type=float, default=None)
+    model.add_argument("--style-blocks", default=None,
+                       help="スタイル LoRA をブロック別にスケールする（例 down=0.0,mid=0.5,up=1.0）。"
+                            "**再学習が要らない。** スタイル LoRA は attn2（テキストと画像を"
+                            "結ぶ層）にも入っており、down を弱めると被写体の構図を土台に"
+                            "任せられる")
     model.add_argument("--lcm-weight", type=float, default=None)
 
     sampling = parser.add_argument_group("生成の設定")
@@ -172,12 +177,20 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"[gen] モデル: {cfg.model.base_model} ＋ LoRA（style={style_weight} lcm={lcm_weight}）")
         pipe = pipeline_module.load_base_pipeline(cfg, device, dtype)
+        blocks = None
+        if args.style_blocks:
+            blocks = {}
+            for item in args.style_blocks.split(","):
+                key, _, value = item.partition("=")
+                blocks[key.strip()] = float(value)
+            print(f"[gen] スタイル LoRA のブロック別スケール: {blocks}")
         pipeline_module.attach_loras(
             pipe,
             cfg,
             style_lora_dir=args.lora_dir,
             style_weight=style_weight,
             lcm_weight=lcm_weight,
+            style_blocks=blocks,
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)

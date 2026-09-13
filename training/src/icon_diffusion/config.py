@@ -77,6 +77,13 @@ class TrainConfig:
     seed: int = 42
     mixed_precision: str = "no"
     checkpointing_steps: int = 200
+    # 以下は 2026-09-13 に追加。15 回の試行で一度も振っていなかった変数
+    lr_scheduler: str = "constant"
+    lr_warmup_steps: int = 0
+    # 0 で無効。SD1.5 が純白を出せない既知の欠陥（終端 SNR ≠ 0）への対処
+    noise_offset: float = 0.0
+    # Min-SNR 重み付け。None で無効
+    snr_gamma: float | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +215,10 @@ def _shell_exports(cfg: Config) -> str:
         "CFG_SEED": str(cfg.train.seed),
         "CFG_MIXED_PRECISION": cfg.train.mixed_precision,
         "CFG_CHECKPOINTING_STEPS": str(cfg.train.checkpointing_steps),
+        "CFG_LR_SCHEDULER": cfg.train.lr_scheduler,
+        "CFG_LR_WARMUP": str(cfg.train.lr_warmup_steps),
+        "CFG_NOISE_OFFSET": repr(cfg.train.noise_offset),
+        "CFG_SNR_GAMMA": ("" if cfg.train.snr_gamma is None else repr(cfg.train.snr_gamma)),
     }
     return "\n".join(f"{k}={shlex.quote(v)}" for k, v in values.items())
 

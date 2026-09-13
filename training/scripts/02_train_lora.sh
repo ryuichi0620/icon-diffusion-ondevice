@@ -90,8 +90,8 @@ ARGS=(
   --train_batch_size="$CFG_TRAIN_BATCH_SIZE"
   --gradient_accumulation_steps="$CFG_GRAD_ACCUM"
   --learning_rate="$CFG_LEARNING_RATE"
-  --lr_scheduler=constant
-  --lr_warmup_steps=0
+  --lr_scheduler="${CFG_LR_SCHEDULER:-constant}"
+  --lr_warmup_steps="${CFG_LR_WARMUP:-0}"
   --max_train_steps="$CFG_MAX_TRAIN_STEPS"
   --rank="$CFG_RANK"
   --seed="$CFG_SEED"
@@ -99,6 +99,12 @@ ARGS=(
   --mixed_precision="$CFG_MIXED_PRECISION"
 )
 [[ -n "$CFG_REVISION" ]] && ARGS+=(--revision="$CFG_REVISION")
+# SD1.5 は終端 SNR がゼロにならないため、純白・純黒を出しきれず中間の明度に寄る
+# （Lin et al. WACV 2024）。noise offset はその標準的な対処。既定 0 は無効。
+[[ "${CFG_NOISE_OFFSET:-0}" != "0" && "${CFG_NOISE_OFFSET:-0}" != "0.0" ]] \
+  && ARGS+=(--noise_offset="$CFG_NOISE_OFFSET")
+# Min-SNR 重み付け。バッチ 1 の勾配分散を下げる
+[[ -n "${CFG_SNR_GAMMA:-}" ]] && ARGS+=(--snr_gamma="$CFG_SNR_GAMMA")
 
 if [[ "$MODE" == "captions" ]]; then
   if [[ ! -f "$CFG_DATASET_DIR/metadata.jsonl" && "$DRY_RUN" -eq 0 ]]; then
