@@ -59,3 +59,6 @@ xcuserdata/
 
 # diffusers から取得した学習スクリプトのキャッシュ
 training/.vendor/
+# 条件付け用グリフ（外部アイコン集から取得。出所の記録だけ追跡する）
+training/data/glyphs/**
+!training/data/glyphs/SOURCE.md
