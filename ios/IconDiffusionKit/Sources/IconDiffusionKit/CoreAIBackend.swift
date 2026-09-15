@@ -181,6 +181,9 @@ public actor CoreAIBackend: DiffusionBackend {
     /// actor の計算プロパティはプロトコル要件を満たせない（隔離を跨ぐ）ので、
     /// 初期化時に確定する不変値として持つ
     public nonisolated let supportsControl: Bool
+    /// 素の経路で残差つき UNet を使うときに差し込むゼロ。**毎ステップ作り直さない**
+    /// （13 本で約 660 万要素あり、作り直すと marshalling だけで効いてくる）
+    private let zeroResiduals: [String: NDArray]?
 
     /// - Parameter preferredComputeUnit: 省略すると Core AI に任せる。
     ///   `.neuralEngine` を指定すると ANE を優先する（`ComputeUnitKind.availableKinds` で確認できる）。
@@ -206,8 +209,13 @@ public actor CoreAIBackend: DiffusionBackend {
         // self を使ったことになってビルドが通らない。static に出す。
         self.textEncoder = try await Self.load(
             resources.textEncoderURL, "TextEncoder", computeUnits.options(for: "TextEncoder"))
+        // 素の UNet が無い構成では、残差つき UNet を素の経路にも使う。
+        // 残差にゼロを渡せば出力は完全に一致する（最大差 0.0 で確認済み）
+        let plainUNetURL = resources.usesControlledUNetOnly
+            ? (resources.controlledUNetURL ?? resources.unetURL) : resources.unetURL
         self.unet = try await Self.load(
-            resources.unetURL, "UNet", computeUnits.options(for: "UNet"))
+            plainUNetURL, resources.usesControlledUNetOnly ? "UNetControlled" : "UNet",
+            computeUnits.options(for: "UNet"))
         self.vaeDecoder = try await Self.load(
             resources.vaeDecoderURL, "VAEDecoder", computeUnits.options(for: "VAEDecoder"))
 
@@ -238,13 +246,34 @@ public actor CoreAIBackend: DiffusionBackend {
 
         self.supportsControl = loadedControlNet != nil && loadedControlledUNet != nil
         self.textEncoderIO = Self.names(configuration, "TextEncoder", DefaultIO.textEncoder)
-        self.unetIO = Self.names(configuration, "UNet", DefaultIO.unet)
+        // 契約も使うモデルのほうを見る
+        if resources.usesControlledUNetOnly, let controlled = configuration.control?["UNetControlled"] {
+            self.unetIO = (controlled.inputs.map(\.name).prefix(3).map { $0 },
+                           controlled.outputs.first?.name ?? "noise_pred")
+            self.zeroResiduals = Self.makeZeroResiduals(controlled, precision: FloatPrecision(
+                dtype: controlled.inputs.first(where: { $0.name == "sample" })?.dtype ?? "float16"))
+        } else {
+            self.unetIO = Self.names(configuration, "UNet", DefaultIO.unet)
+            self.zeroResiduals = nil
+        }
         self.vaeDecoderIO = Self.names(configuration, "VAEDecoder", DefaultIO.vaeDecoder)
         // UNet の sample の dtype を代表として見る。3 モデルとも同じ精度で書き出される
         self.precision = FloatPrecision(
             dtype: configuration.io?["UNet"]?.inputs.first(where: { $0.name == "sample" })?.dtype
                 ?? "float16"
         )
+    }
+
+    /// 残差ぶんのゼロを 1 回だけ作る
+    private static func makeZeroResiduals(_ io: PipelineConfiguration.ModelIO,
+                                          precision: FloatPrecision) -> [String: NDArray] {
+        var result: [String: NDArray] = [:]
+        for input in io.inputs where input.name.hasPrefix("residual_") {
+            let count = input.shape.reduce(1, *)
+            result[input.name] = precision.makeNDArray([Float](repeating: 0, count: count),
+                                                       shape: input.shape)
+        }
+        return result
     }
 
     private static func load(
@@ -390,12 +419,15 @@ public actor CoreAIBackend: DiffusionBackend {
         encoderHiddenStates: Tensor
     ) async throws -> Tensor {
         // timestep は float32 の [1]。整数で渡すとランタイムが弾く
-        let inputs = [
+        var inputs = [
             unetIO.inputs[0]: precision.makeNDArray(sample.values, shape: sample.shape),
             unetIO.inputs[1]: precision.makeNDArray([timestep], shape: [1]),
             unetIO.inputs[2]: precision.makeNDArray(encoderHiddenStates.values,
                                                     shape: encoderHiddenStates.shape),
         ]
+        if let zeroResiduals {
+            inputs.merge(zeroResiduals) { current, _ in current }
+        }
         return try await run(
             unet, inputs: inputs, output: unetIO.output,
             expecting: sample.shape, context: "predictNoise"

@@ -90,8 +90,24 @@ public struct PipelineResources: Sendable {
 
     public func validateModels() throws {
         try Self.require(textEncoderURL)
-        try Self.require(unetURL)
         try Self.require(vaeDecoderURL)
+        // **UNet はどちらか一方あればよい。** 残差つき UNet は、残差にゼロを渡すと
+        // 素の UNet と完全に一致する（最大差 0.0 で確認済み）。両方載せると 821MB の
+        // 重複になるので、ControlNet を使う構成では残差つきだけを同梱する
+        if !Self.exists(unetURL) {
+            guard let controlled = controlledUNetURL, Self.exists(controlled) else {
+                throw IconDiffusionError.missingResource(unetURL)
+            }
+        }
+    }
+
+    /// 素の UNet が無く、残差つき UNet で代用する構成かどうか
+    public var usesControlledUNetOnly: Bool {
+        !Self.exists(unetURL) && controlledUNetURL.map(Self.exists) == true
+    }
+
+    private static func exists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
     }
 
     private static func require(_ url: URL) throws {

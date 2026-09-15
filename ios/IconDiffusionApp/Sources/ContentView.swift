@@ -34,6 +34,11 @@ struct ContentView: View {
     /// タイムラインの地の色に左右される。** auto は輪郭の色に対して WCAG 1.4.11 の
     /// 3:1 を満たすパレット色を選ぶ
     @State private var background = "auto"
+    /// 輪郭を条件に与えるか。**これが「被写体が現実の物に見えない」への答え**
+    /// （Mac 側の実測で 58.3% -> 87.5%。docs/experiments.md Trial 19〜21）
+    @State private var useControl = true
+    @State private var glyphs: GlyphLibrary?
+    @State private var resolvedGlyph: String?
     @State private var candidates: [Candidate] = []
     @State private var selectedID: Int?
     @State private var status = ""
@@ -54,6 +59,30 @@ struct ContentView: View {
             TextField("被写体（英語）", text: $subject)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
+                .onChange(of: subject) { _, _ in refreshGlyph() }
+
+            if let glyphs {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("形を下敷きにする", isOn: $useControl)
+                        .font(.footnote)
+                    // 表に無い語を打たせないための補完。引けない語は条件なしに落ちる
+                    let candidates = glyphs.suggestions(for: subject)
+                    if useControl, !candidates.isEmpty, resolvedGlyph == nil {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(candidates, id: \.self) { word in
+                                    Button(word) { subject = word }
+                                        .font(.caption)
+                                        .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
+                    Text(controlStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Picker("背景", selection: $background) {
                 Text("自動").tag("auto")
@@ -63,6 +92,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: background) { _, _ in restyleAll() }
+            .onChange(of: useControl) { _, _ in refreshGlyph() }
 
             HStack(spacing: 12) {
                 Button(isBusy ? "生成中…" : "候補を \(candidateCount) 枚生成") {
@@ -89,6 +119,13 @@ struct ContentView: View {
         // 起動直後に prewarm しない（初回コンパイルのピークメモリ対策）。
         // DEVICECTL_CHILD_ICON_AUTO=generate で無人実行。
         .task {
+            if let root = Bundle.main.resourceURL?
+                .appendingPathComponent("Models").appendingPathComponent("Glyphs") {
+                glyphs = GlyphLibrary(directory: root)
+                refreshGlyph()
+                log(glyphs == nil ? "グリフの表を読めませんでした"
+                                  : "グリフ \(glyphs?.words.count ?? 0) 語を読みました")
+            }
             let mode = ProcessInfo.processInfo.environment["ICON_AUTO"] ?? ""
             log("起動しました（ICON_AUTO=\(mode.isEmpty ? "なし" : mode)）")
             #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
@@ -113,6 +150,19 @@ struct ContentView: View {
             }
             log("自動実行を終えました")
         }
+    }
+
+    /// いまの被写体で輪郭が引けるかを、生成前に見せる
+    private var controlStatus: String {
+        guard useControl else { return "形の下敷きなし（文字だけで作ります）" }
+        guard let name = resolvedGlyph else {
+            return "この語では形を引けません。文字だけで作ります"
+        }
+        return "形の下敷き: \(name)"
+    }
+
+    private func refreshGlyph() {
+        resolvedGlyph = useControl ? glyphs?.resolve(subject) : nil
     }
 
     @ViewBuilder private var selectedView: some View {
@@ -273,11 +323,16 @@ struct ContentView: View {
             for index in 0..<candidateCount {
                 log("候補 \(index + 1)/\(candidateCount) を生成中…")
                 let seed = UInt64.random(in: 0..<UInt64.max)
-                let options = IconDiffusionPipeline.Options(
+                var options = IconDiffusionPipeline.Options(
                     steps: steps,
                     guidanceScale: guidance,
                     seed: seed
                 )
+                if useControl, let name = resolvedGlyph, let glyphs {
+                    // 輪郭は生成解像度に合わせる。契約は pipeline_config.json 側が持つ
+                    options.control = glyphs.controlTensor(
+                        for: name, size: pipeline.configuration.imageSize)
+                }
                 let generated = try await pipeline.generateIcon(subject: subject, options: options)
                 let transparent = IconPostprocess.process(generated)
                 let polished = IconShapes.polish(transparent.image, size: outputSize,

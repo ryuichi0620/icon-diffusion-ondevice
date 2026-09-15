@@ -435,6 +435,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--controlnet", default=None,
                         help="輪郭を条件に与える経路も書き出す（例 lllyasviel/sd-controlnet-canny）。"
                              "ControlNet と『残差つき UNet』の 2 モデルが増える")
+    parser.add_argument("--keep-plain-unet", action="store_true",
+                        help="--controlnet と併用しても素の UNet を残す（検証用。821MB 増える）")
     parser.add_argument("--skip-resources", action="store_true", help="Swift 資産の書き出しをしない")
     args = parser.parse_args(argv)
 
@@ -492,6 +494,12 @@ def main(argv: list[str] | None = None) -> int:
         modules["ControlNet"] = ControlNetWrapper(controlnet).eval()
         modules["UNetControlled"] = UNetWithResidualsWrapper(pipe.unet).eval()
         examples.update(build_control_examples(pipe, controlnet, args.batch))
+        # **素の UNet は載せない。** 残差にゼロを渡すと残差つき UNet の出力は
+        # 素の UNet と**完全に一致する**（最大差 0.0 で確認済み。残差は skip 接続に
+        # 足されるだけなので、ゼロなら何も起きない）。821MB の重複を避ける
+        if not args.keep_plain_unet:
+            del modules["UNet"], examples["UNet"]
+            print("[stage5] 素の UNet は載せません（残差ゼロで代用できる。821MB の節約）")
 
     # **ANE は fp32 を扱えない。** fp32 のまま出すと "Incompatible element type for ANE:
     # expected fp16, f8E4M3, si8, ui8, si16, or ui16" で検証に落ち、GPU/CPU に回った挙句
