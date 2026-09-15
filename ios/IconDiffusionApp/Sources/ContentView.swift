@@ -118,7 +118,10 @@ struct ContentView: View {
         }
         .padding()
         // 起動直後に prewarm しない（初回コンパイルのピークメモリ対策）。
-        // DEVICECTL_CHILD_ICON_AUTO=generate で無人実行。
+        // 無人実行は起動引数で指示する:
+        //   xcrun devicectl device process launch --device <UDID> --console \
+        //     --terminate-existing com.egoshi.icondiffusion \
+        //     -ICON_AUTO generate -ICON_SUBJECT "a coffee cup"
         .task {
             if let root = Bundle.main.resourceURL?
                 .appendingPathComponent("Models").appendingPathComponent("Glyphs") {
