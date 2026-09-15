@@ -53,6 +53,7 @@ def remove_flat_background(
     candidate = distance <= (tolerance + feather)
 
     reachable = _flood_from_border(candidate)
+    reachable |= _enclosed_seams(candidate, reachable)
 
     # 背景領域内では距離に応じて alpha を立ち上げ、それ以外は不透明
     ramp = np.clip((distance - tolerance) / max(feather, 1e-6), 0.0, 1.0)
@@ -72,6 +73,39 @@ def remove_flat_background(
         ]
     )
     return Image.fromarray(rgba, mode="RGBA")
+
+
+def _enclosed_seams(candidate: np.ndarray, reachable: np.ndarray) -> np.ndarray:
+    """外周から届かない背景色の領域のうち、**細いスジだけ**を背景に含める。
+
+    外周続きだけを抜く規則は、湯気やカレンダーの升目のような「意匠としての白抜き」を
+    守るために要る。だがその規則は、図形どうしの境目に残った地の色も守ってしまう。
+    実測では 64 枚中 63 枚に、高さ 6〜10px・幅 350〜670px という細長い白が残っており、
+    単色背景を敷くと割れ目のように見えるうえ、白 x コーラルは 2.82:1 で
+    WCAG の 3:1 を満たさない。
+
+    意匠としての白抜きは面なので侵食しても残る。スジは残らない。この違いで分ける
+    （実測: 升目 7.7% / 電球のハイライト 5.3% は残り、スジは全て消える）。
+    """
+    from .shapes import label_components, _morph
+
+    enclosed = candidate & ~reachable
+    if not enclosed.any():
+        return np.zeros_like(candidate)
+    height, width = candidate.shape
+    # 半径は画素数ではなく画布に対して決める。512 と 1024 で判定が変わっては困る
+    radius = max(1, round(5 * min(height, width) / 1024))
+    min_area = max(50, (height * width) // 5000)
+
+    labels, count = label_components(enclosed)
+    seams = np.zeros_like(candidate)
+    for index in range(1, count + 1):
+        part = labels == index
+        if part.sum() < min_area:
+            continue
+        if not _morph(part, radius, dilate=False).any():
+            seams |= part
+    return seams
 
 
 def _flood_from_border(candidate: np.ndarray) -> np.ndarray:

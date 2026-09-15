@@ -340,11 +340,20 @@ public actor CoreAIBackend: DiffusionBackend {
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws {
         try resources.validateModels()
-        var targets = [
-            (resources.textEncoderURL, "TextEncoder"),
-            (resources.unetURL, "UNet"),
-            (resources.vaeDecoderURL, "VAEDecoder"),
-        ]
+        // **実際に使う UNet を読む。** 素の UNet を決め打ちで読んでいたので、
+        // 残差つきだけを同梱する構成では必ず失敗していた（本番の読み込みは
+        // 通るのでプリウォームだけが無駄に落ちる、気づきにくい壊れ方だった）
+        var targets = [(resources.textEncoderURL, "TextEncoder")]
+        if resources.usesControlledUNetOnly, let controlled = resources.controlledUNetURL {
+            targets.append((controlled, "UNetControlled"))
+        } else {
+            targets.append((resources.unetURL, "UNet"))
+        }
+        if let controlNet = resources.controlNetURL,
+           FileManager.default.fileExists(atPath: controlNet.path) {
+            targets.append((controlNet, "ControlNet"))
+        }
+        targets.append((resources.vaeDecoderURL, "VAEDecoder"))
         if let only {
             targets = targets.filter { $0.1 == only }
         }

@@ -4,6 +4,7 @@ import CoreAI
 import IconDiffusionKit
 import ImageIO
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// 被写体から**候補を複数枚**生成し、後処理（透過 → 形の整形 → 滑らかに描き直し）と
@@ -126,7 +127,9 @@ struct ContentView: View {
                 log(glyphs == nil ? "グリフの表を読めませんでした"
                                   : "グリフ \(glyphs?.words.count ?? 0) 語を読みました")
             }
-            let mode = ProcessInfo.processInfo.environment["ICON_AUTO"] ?? ""
+            // DEVICECTL_CHILD_ 接頭辞の環境変数は、この端末・この devicectl では届かなかった。
+            // 起動引数（-ICON_AUTO generate）なら UserDefaults 経由で確実に読める
+            let mode = Self.setting("ICON_AUTO") ?? ""
             log("起動しました（ICON_AUTO=\(mode.isEmpty ? "なし" : mode)）")
             #if canImport(CoreAI) && ICON_DIFFUSION_COREAI
             if mode == "selftest" {
@@ -141,8 +144,9 @@ struct ContentView: View {
             }
             #endif
             guard !didPrewarm, mode == "prewarm" || mode == "generate" else { return }
-            if let override = ProcessInfo.processInfo.environment["ICON_SUBJECT"] {
+            if let override = Self.setting("ICON_SUBJECT") {
                 subject = override
+                refreshGlyph()
             }
             await prewarm()
             if mode == "generate" {
@@ -247,6 +251,14 @@ struct ContentView: View {
         saveForInspection(candidate.processed, name: "latest.png")
     }
 
+    /// 環境変数と起動引数の両方から読む。
+    /// 起動引数は `-ICON_AUTO generate` の形で渡すと UserDefaults が拾ってくれる
+    static func setting(_ key: String) -> String? {
+        if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty { return value }
+        if let value = UserDefaults.standard.string(forKey: key), !value.isEmpty { return value }
+        return nil
+    }
+
     private static func unit(_ name: String?) -> ComputeUnitKind? {
         switch name {
         case "default": return nil
@@ -302,11 +314,37 @@ struct ContentView: View {
     private func log(_ message: String) {
         status = message
         print("[app] \(message)")
+        Self.appendToLogFile(message)
+    }
+
+    /// Documents にも残す。**端末がロックされると devicectl の --console 接続が切れる**ので、
+    /// 標準出力だけだと長い生成の結果を取りこぼす。後から copy from で回収できるようにしておく
+    private static let logURL: URL? = FileManager.default
+        .urls(for: .documentDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("run.log")
+
+    private static func appendToLogFile(_ message: String) {
+        guard let url = logURL else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(stamp) \(message)\n".data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
     }
 
     private func generateCandidates() async {
         isBusy = true
-        defer { isBusy = false }
+        // 生成は端末で 1 分以上かかる。途中で自動ロックされると計算が止まるうえ、
+        // devicectl の console 接続も切れて結果が分からなくなる
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer {
+            isBusy = false
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
         candidates = []
         selectedID = nil
         do {
@@ -315,8 +353,8 @@ struct ContentView: View {
             // 生成条件は Mac 側の比較で確定した値を既定にし、実験用に環境変数で上書き可。
             // 8 步にしたのは形の採点で 4 步に勝ったから（96 枚ずつ・seed 2 通りの両方で
             // 平均 0.399 -> 0.493）。1 枚あたりの時間は倍になるが、形の当たりが増える
-            let steps = Int(env["ICON_STEPS"] ?? "") ?? 8
-            let guidance = Float(env["ICON_GUIDANCE"] ?? "") ?? 1.0
+            let steps = Int(Self.setting("ICON_STEPS") ?? "") ?? 8
+            let guidance = Float(Self.setting("ICON_GUIDANCE") ?? "") ?? 1.0
             log("生成中…（\(steps) ステップ / guidance \(guidance)）")
 
             let started = Date()
