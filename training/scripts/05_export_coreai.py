@@ -55,10 +55,17 @@ def lcm_timesteps(pipe, steps: int = LCM_VERIFICATION_STEPS) -> list[int]:
 # Swift 側が入出力を名前で引くための契約。**必ず明示的に渡すこと。**
 # 省略すると出力名がグラフ内部の自動生成名（convolution_97 など）になり、
 # モデルが少し変わるだけで名前が変わって Swift 側が静かに壊れる。
+RESIDUAL_NAMES = [f"residual_{i}" for i in range(13)]   # down 12 + mid 1
+
 IO_NAMES = {
     "TextEncoder": (["input_ids"], ["text_embeddings"]),
     "UNet": (["sample", "timestep", "encoder_hidden_states"], ["noise_pred"]),
     "VAEDecoder": (["latent"], ["image"]),
+    # 輪郭を条件に与える経路。使うときだけ載せる（--controlnet）
+    "ControlNet": (["sample", "timestep", "encoder_hidden_states", "controlnet_cond"],
+                   RESIDUAL_NAMES),
+    "UNetControlled": (["sample", "timestep", "encoder_hidden_states"] + RESIDUAL_NAMES,
+                       ["noise_pred"]),
 }
 
 
@@ -183,6 +190,34 @@ def build_examples(pipe, batch: int) -> dict[str, tuple]:
     }
 
 
+def build_control_examples(pipe, controlnet, batch: int) -> dict[str, tuple]:
+    """ControlNet と「残差つき UNet」の入力例。
+
+    残差の形は ControlNet を 1 回走らせて実測する。ブロック構成に依存するので、
+    ここを決め打ちにすると土台を替えたときに静かに壊れる。
+    """
+    import torch
+
+    unet_config = pipe.unet.config
+    latent_channels = int(getattr(unet_config, "in_channels", 4))
+    latent_size = int(getattr(unet_config, "sample_size", 64))
+    seq_len = int(getattr(pipe.tokenizer, "model_max_length", 77))
+    embed_dim = int(pipe.text_encoder.config.hidden_size)
+    image_size = latent_size * int(getattr(pipe, "vae_scale_factor", 8))
+
+    sample = torch.randn(batch, latent_channels, latent_size, latent_size)
+    timestep = torch.tensor([999.0])
+    embed = torch.randn(batch, seq_len, embed_dim)
+    hint = torch.randn(batch, 3, image_size, image_size)
+    with torch.no_grad():
+        down, mid = controlnet(sample, timestep, encoder_hidden_states=embed,
+                               controlnet_cond=hint, return_dict=False)
+    return {
+        "ControlNet": (sample, timestep, embed, hint),
+        "UNetControlled": (sample, timestep, embed, *down, mid),
+    }
+
+
 def export_tokenizer_files(tokenizer, resources_dir: Path, *, model_path: Path) -> str:
     """Swift の CLIPTokenizer が読む vocab.json / merges.txt を取り出す。
 
@@ -235,8 +270,38 @@ def export_tokenizer_files(tokenizer, resources_dir: Path, *, model_path: Path) 
     )
 
 
+def control_io_section(residual_shapes, latent_channels, latent_size, image_size,
+                       max_sequence_length, text_embed_dim, float_dtype) -> dict:
+    """ControlNet と『残差つき UNet』の入出力契約。
+
+    残差の形は実測したものを渡す。ブロック構成に依存するので決め打ちにしない。
+    """
+    residuals = [{"name": f"residual_{i}", "shape": list(shape), "dtype": float_dtype}
+                 for i, shape in enumerate(residual_shapes)]
+    common = [
+        {"name": "sample",
+         "shape": [1, latent_channels, latent_size, latent_size], "dtype": float_dtype},
+        {"name": "timestep", "shape": [1], "dtype": float_dtype},
+        {"name": "encoder_hidden_states",
+         "shape": [1, max_sequence_length, text_embed_dim], "dtype": float_dtype},
+    ]
+    return {
+        "ControlNet": {
+            "inputs": common + [{"name": "controlnet_cond",
+                                 "shape": [1, 3, image_size, image_size], "dtype": float_dtype}],
+            "outputs": residuals,
+        },
+        "UNetControlled": {
+            "inputs": common + residuals,
+            "outputs": [{"name": "noise_pred",
+                         "shape": [1, latent_channels, latent_size, latent_size],
+                         "dtype": float_dtype}],
+        },
+    }
+
+
 def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path,
-                          precision: str = "fp16") -> dict:
+                          precision: str = "fp16", residual_shapes=None) -> dict:
     """Swift 側が読むトークナイザ資産と pipeline_config.json を書き出す。"""
     import torch
 
@@ -272,6 +337,10 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path,
     max_sequence_length = int(getattr(pipe.tokenizer, "model_max_length", 77))
     # Swift 側はこの dtype を見て NDArray を作る。**ここがズレると静かに壊れる。**
     float_dtype = "float16" if precision == "fp16" else "float32"
+
+    control_io = (control_io_section(residual_shapes, latent_channels, latent_size, image_size,
+                                     max_sequence_length, text_embed_dim, float_dtype)
+                  if residual_shapes else {})
 
     config = {
         "base_model": cfg.model.base_model,
@@ -326,6 +395,8 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path,
                              "shape": [1, 3, image_size, image_size], "dtype": float_dtype}],
             },
         },
+        # 輪郭を条件に与える経路。載せていなければ空のまま
+        "control": control_io,
         # Swift のテストが突き合わせる値。実スケジューラから導出する
         "verification": {
             "timesteps_4step": timesteps_4step,
@@ -361,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Core AI を使わず、PyTorch のまま 3 つのラッパーを実行して形だけ確認する",
     )
+    parser.add_argument("--controlnet", default=None,
+                        help="輪郭を条件に与える経路も書き出す（例 lllyasviel/sd-controlnet-canny）。"
+                             "ControlNet と『残差つき UNet』の 2 モデルが増える")
     parser.add_argument("--skip-resources", action="store_true", help="Swift 資産の書き出しをしない")
     args = parser.parse_args(argv)
 
@@ -407,6 +481,18 @@ def main(argv: list[str] | None = None) -> int:
     }
     examples = build_examples(pipe, args.batch)
 
+    if args.controlnet:
+        from diffusers import ControlNetModel  # noqa: PLC0415
+        from icon_diffusion.export_wrappers import (  # noqa: PLC0415
+            ControlNetWrapper, UNetWithResidualsWrapper,
+        )
+        print(f"[stage5] ControlNet も載せます: {args.controlnet}")
+        controlnet = ControlNetModel.from_pretrained(
+            args.controlnet, torch_dtype=torch.float32).eval()
+        modules["ControlNet"] = ControlNetWrapper(controlnet).eval()
+        modules["UNetControlled"] = UNetWithResidualsWrapper(pipe.unet).eval()
+        examples.update(build_control_examples(pipe, controlnet, args.batch))
+
     # **ANE は fp32 を扱えない。** fp32 のまま出すと "Incompatible element type for ANE:
     # expected fp16, f8E4M3, si8, ui8, si16, or ui16" で検証に落ち、GPU/CPU に回った挙句
     # 端末でメモリを食い潰して std::bad_alloc で落ちる（実機で踏んだ）。
@@ -422,7 +508,11 @@ def main(argv: list[str] | None = None) -> int:
         print("[stage5] ⚠ fp32 で書き出します。**ANE には載りません**（検証に落ちます）")
 
     if not args.skip_resources:
-        config = write_swift_resources(cfg, pipe, resources_dir, Path(model_path), precision)
+        # 残差の形は入力例そのものから取る（UNetControlled の 4 本目以降が残差）
+        residual_shapes = ([tuple(t.shape) for t in examples["UNetControlled"][3:]]
+                           if args.controlnet else None)
+        config = write_swift_resources(cfg, pipe, resources_dir, Path(model_path), precision,
+                                       residual_shapes=residual_shapes)
         print(f"[stage5] Swift 資産: {resources_dir}")
         print("[stage5]   vocab.json / merges.txt / pipeline_config.json")
         print(

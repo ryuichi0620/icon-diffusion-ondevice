@@ -9,6 +9,9 @@ public struct PipelineResources: Sendable {
     public var textEncoderURL: URL
     public var unetURL: URL
     public var vaeDecoderURL: URL
+    /// 輪郭を条件に与える経路。載せていなければ nil のまま
+    public var controlNetURL: URL?
+    public var controlledUNetURL: URL?
     public var vocabularyURL: URL
     public var mergesURL: URL
     public var configurationURL: URL
@@ -19,7 +22,9 @@ public struct PipelineResources: Sendable {
         vaeDecoderURL: URL,
         vocabularyURL: URL,
         mergesURL: URL,
-        configurationURL: URL
+        configurationURL: URL,
+        controlNetURL: URL? = nil,
+        controlledUNetURL: URL? = nil
     ) {
         self.textEncoderURL = textEncoderURL
         self.unetURL = unetURL
@@ -27,11 +32,16 @@ public struct PipelineResources: Sendable {
         self.vocabularyURL = vocabularyURL
         self.mergesURL = mergesURL
         self.configurationURL = configurationURL
+        self.controlNetURL = controlNetURL
+        self.controlledUNetURL = controlledUNetURL
     }
 
     public static let textEncoderFileName = "IconTextEncoder.aimodel"
     public static let unetFileName = "IconUNet.aimodel"
     public static let vaeDecoderFileName = "IconVAEDecoder.aimodel"
+    /// 輪郭を条件に与える経路。**無くても動く**ので、必須の検証には入れない
+    public static let controlNetFileName = "IconControlNet.aimodel"
+    public static let controlledUNetFileName = "IconUNetControlled.aimodel"
     public static let vocabularyFileName = "vocab.json"
     public static let mergesFileName = "merges.txt"
     public static let configurationFileName = "pipeline_config.json"
@@ -44,7 +54,9 @@ public struct PipelineResources: Sendable {
             vaeDecoderURL: directory.appendingPathComponent(vaeDecoderFileName),
             vocabularyURL: directory.appendingPathComponent(vocabularyFileName),
             mergesURL: directory.appendingPathComponent(mergesFileName),
-            configurationURL: directory.appendingPathComponent(configurationFileName)
+            configurationURL: directory.appendingPathComponent(configurationFileName),
+            controlNetURL: directory.appendingPathComponent(controlNetFileName),
+            controlledUNetURL: directory.appendingPathComponent(controlledUNetFileName)
         )
     }
 

@@ -52,3 +52,59 @@ class VAEDecoderWrapper(torch.nn.Module):
 
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
         return self.vae.decode(latent / self.scaling_factor).sample
+
+
+class ControlNetWrapper(torch.nn.Module):
+    """輪郭を条件として受け取り、UNet に足す残差を返す。
+
+    **出力はタプル 13 本**（down 12 + mid 1）。Core AI は名前付きの出力を並べるだけなので、
+    ここで平らにして 1 本ずつ名前を付けられる形にする。名前を明示しないと
+    `convolution_97` のような自動生成名になり、モデルが少し変わると Swift 側が静かに壊れる
+    （docs/architecture.md 6.5 節と同じ轍）。
+    """
+
+    def __init__(self, controlnet: torch.nn.Module) -> None:
+        super().__init__()
+        self.controlnet = controlnet
+
+    def forward(
+        self,
+        sample: torch.Tensor,
+        timestep: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        controlnet_cond: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        down, mid = self.controlnet(
+            sample, timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            controlnet_cond=controlnet_cond,
+            return_dict=False,
+        )
+        return (*down, mid)
+
+
+class UNetWithResidualsWrapper(torch.nn.Module):
+    """ControlNet の残差も受け取る UNet。入力は 3 本 + 13 本 = 16 本。
+
+    残差なしの `UNetWrapper` と**別モデルとして書き出す**。同じモデルに任意個の入力を
+    持たせられないうえ、条件を使わない生成では残差なし版のほうが速いので、両方を載せる。
+    """
+
+    def __init__(self, unet: torch.nn.Module) -> None:
+        super().__init__()
+        self.unet = unet
+
+    def forward(
+        self,
+        sample: torch.Tensor,
+        timestep: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        *residuals: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.unet(
+            sample, timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            down_block_additional_residuals=list(residuals[:-1]),
+            mid_block_additional_residual=residuals[-1],
+            return_dict=False,
+        )[0]

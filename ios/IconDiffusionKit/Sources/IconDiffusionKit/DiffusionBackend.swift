@@ -15,6 +15,29 @@ public protocol DiffusionBackend: Sendable {
 
     /// 生成ごとに 1 回。`[1, C, S, S]` -> `[1, 3, imageSize, imageSize]`（値域 `[-1, 1]`）
     func decodeLatent(_ latent: Tensor) async throws -> Tensor
+
+    /// 輪郭を条件に与える経路が載っているか。載っていないビルドでも動くよう既定は false
+    var supportsControl: Bool { get }
+
+    /// 輪郭つきのノイズ予測。ControlNet で残差を出し、それを受け取る UNet に渡す。
+    ///
+    /// **これが「被写体が現実の物に見えない」への答え**（docs/experiments.md Trial 19〜21）。
+    /// テキストだけで構造を指定するのをやめ、形は外から与えてスタイルだけモデルに任せる。
+    /// `control` は `[1, 3, imageSize, imageSize]` の輪郭画像（白線・黒地）。
+    func predictNoise(sample: Tensor, timestep: Float, encoderHiddenStates: Tensor,
+                     control: Tensor) async throws -> Tensor
+}
+
+extension DiffusionBackend {
+    /// 既定は「載っていない」。StubBackend と、ControlNet 抜きで書き出したモデルがここに入る
+    public var supportsControl: Bool { false }
+
+    public func predictNoise(sample: Tensor, timestep: Float, encoderHiddenStates: Tensor,
+                             control: Tensor) async throws -> Tensor {
+        throw IconDiffusionError.unsupportedDevice(
+            "輪郭を条件に与える経路が載っていません（Stage 5 を --controlnet 付きで実行してください）"
+        )
+    }
 }
 
 /// モデルを使わず、形だけ正しい値を返すバックエンド。

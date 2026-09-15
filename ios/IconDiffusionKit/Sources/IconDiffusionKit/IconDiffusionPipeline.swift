@@ -20,18 +20,32 @@ public struct IconDiffusionPipeline: Sendable {
         public var negativePrompt: String
         /// (完了ステップ数, 全ステップ数)。UI の進捗表示用。
         public var onProgress: (@Sendable (Int, Int) -> Void)?
+        /// 輪郭を条件に与えるときの画像 `[1, 3, imageSize, imageSize]`（白線・黒地）。
+        /// **形はここから、スタイルはモデルから。** nil なら従来どおり文字だけで作る
+        public var control: Tensor?
+        /// 条件の効き。1.0 に近いほど輪郭に忠実だがスタイルが痩せる。
+        /// Mac 側のスイープでは 0.75 が最良で、0.95 まで上げると輪郭をなぞるだけになった
+        public var controlScale: Float
+        /// 途中で条件を切る割合。終盤を自由にするとスタイルが乗りやすい
+        public var controlEnd: Float
 
         public init(
             steps: Int = 4,
             guidanceScale: Float = 1.0,
             seed: UInt64 = 0,
             negativePrompt: String = "",
+            control: Tensor? = nil,
+            controlScale: Float = 0.75,
+            controlEnd: Float = 0.8,
             onProgress: (@Sendable (Int, Int) -> Void)? = nil
         ) {
             self.steps = steps
             self.guidanceScale = guidanceScale
             self.seed = seed
             self.negativePrompt = negativePrompt
+            self.control = control
+            self.controlScale = controlScale
+            self.controlEnd = controlEnd
             self.onProgress = onProgress
         }
     }
@@ -99,11 +113,23 @@ public struct IconDiffusionPipeline: Sendable {
             .gaussianTensor(shape: configuration.latentShape)
             .scaled(by: scheduler.initialNoiseSigma)
 
+        // 条件を使うのは序盤だけ。終盤まで効かせると輪郭をなぞるだけになる
+        let controlSteps = options.control == nil ? 0
+            : max(1, Int((Float(scheduler.timesteps.count) * options.controlEnd).rounded()))
+
         for (index, timestep) in scheduler.timesteps.enumerated() {
             let time = Float(timestep)
-            var noisePrediction = try await backend.predictNoise(
-                sample: latents, timestep: time, encoderHiddenStates: conditioning
-            )
+            var noisePrediction: Tensor
+            if let control = options.control, index < controlSteps, backend.supportsControl {
+                noisePrediction = try await backend.predictNoise(
+                    sample: latents, timestep: time, encoderHiddenStates: conditioning,
+                    control: control
+                )
+            } else {
+                noisePrediction = try await backend.predictNoise(
+                    sample: latents, timestep: time, encoderHiddenStates: conditioning
+                )
+            }
             try noisePrediction.requireShape(latents.shape, context: "predictNoise")
 
             if let unconditional {

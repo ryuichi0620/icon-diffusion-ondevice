@@ -113,6 +113,352 @@
       ]
     }
   },
+  "control": {
+    "ControlNet": {
+      "inputs": [
+        {
+          "name": "sample",
+          "shape": [
+            1,
+            4,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "timestep",
+          "shape": [
+            1
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "encoder_hidden_states",
+          "shape": [
+            1,
+            77,
+            768
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "controlnet_cond",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "dtype": "float16"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "residual_0",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_1",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_2",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_3",
+          "shape": [
+            1,
+            320,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_4",
+          "shape": [
+            1,
+            640,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_5",
+          "shape": [
+            1,
+            640,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_6",
+          "shape": [
+            1,
+            640,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_7",
+          "shape": [
+            1,
+            1280,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_8",
+          "shape": [
+            1,
+            1280,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_9",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_10",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_11",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_12",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        }
+      ]
+    },
+    "UNetControlled": {
+      "inputs": [
+        {
+          "name": "sample",
+          "shape": [
+            1,
+            4,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "timestep",
+          "shape": [
+            1
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "encoder_hidden_states",
+          "shape": [
+            1,
+            77,
+            768
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_0",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_1",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_2",
+          "shape": [
+            1,
+            320,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_3",
+          "shape": [
+            1,
+            320,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_4",
+          "shape": [
+            1,
+            640,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_5",
+          "shape": [
+            1,
+            640,
+            32,
+            32
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_6",
+          "shape": [
+            1,
+            640,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_7",
+          "shape": [
+            1,
+            1280,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_8",
+          "shape": [
+            1,
+            1280,
+            16,
+            16
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_9",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_10",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_11",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        },
+        {
+          "name": "residual_12",
+          "shape": [
+            1,
+            1280,
+            8,
+            8
+          ],
+          "dtype": "float16"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "noise_pred",
+          "shape": [
+            1,
+            4,
+            64,
+            64
+          ],
+          "dtype": "float16"
+        }
+      ]
+    }
+  },
   "verification": {
     "timesteps_4step": [
       999,

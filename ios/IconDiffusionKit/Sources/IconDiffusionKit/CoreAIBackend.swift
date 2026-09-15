@@ -173,6 +173,15 @@ public actor CoreAIBackend: DiffusionBackend {
     private let vaeDecoderIO: (inputs: [String], output: String)
     private let precision: FloatPrecision
 
+    // 輪郭を条件に与える経路。**無ければ nil で、生成は従来どおり動く**
+    private let controlNet: InferenceFunction?
+    private let controlledUNet: InferenceFunction?
+    private let controlNetIO: (inputs: [String], outputs: [String])?
+    private let controlledUNetIO: (inputs: [String], output: String)?
+    /// actor の計算プロパティはプロトコル要件を満たせない（隔離を跨ぐ）ので、
+    /// 初期化時に確定する不変値として持つ
+    public nonisolated let supportsControl: Bool
+
     /// - Parameter preferredComputeUnit: 省略すると Core AI に任せる。
     ///   `.neuralEngine` を指定すると ANE を優先する（`ComputeUnitKind.availableKinds` で確認できる）。
     public init(
@@ -202,6 +211,32 @@ public actor CoreAIBackend: DiffusionBackend {
         self.vaeDecoder = try await Self.load(
             resources.vaeDecoderURL, "VAEDecoder", computeUnits.options(for: "VAEDecoder"))
 
+        // ControlNet は「あれば載せる」。ファイルが無い構成でも従来どおり動く必要がある
+        var loadedControlNet: InferenceFunction?
+        var loadedControlledUNet: InferenceFunction?
+        if let controlURL = resources.controlNetURL,
+           let controlledURL = resources.controlledUNetURL,
+           FileManager.default.fileExists(atPath: controlURL.path),
+           FileManager.default.fileExists(atPath: controlledURL.path),
+           configuration.control?["ControlNet"] != nil {
+            loadedControlNet = try await Self.load(
+                controlURL, "ControlNet", computeUnits.options(for: "ControlNet"))
+            loadedControlledUNet = try await Self.load(
+                controlledURL, "UNetControlled", computeUnits.options(for: "UNetControlled"))
+        }
+        self.controlNet = loadedControlNet
+        self.controlledUNet = loadedControlledUNet
+        if let section = configuration.control?["ControlNet"],
+           let controlled = configuration.control?["UNetControlled"], loadedControlNet != nil {
+            self.controlNetIO = (section.inputs.map(\.name), section.outputs.map(\.name))
+            self.controlledUNetIO = (controlled.inputs.map(\.name),
+                                     controlled.outputs.first?.name ?? "noise_pred")
+        } else {
+            self.controlNetIO = nil
+            self.controlledUNetIO = nil
+        }
+
+        self.supportsControl = loadedControlNet != nil && loadedControlledUNet != nil
         self.textEncoderIO = Self.names(configuration, "TextEncoder", DefaultIO.textEncoder)
         self.unetIO = Self.names(configuration, "UNet", DefaultIO.unet)
         self.vaeDecoderIO = Self.names(configuration, "VAEDecoder", DefaultIO.vaeDecoder)
@@ -364,6 +399,57 @@ public actor CoreAIBackend: DiffusionBackend {
         return try await run(
             unet, inputs: inputs, output: unetIO.output,
             expecting: sample.shape, context: "predictNoise"
+        )
+    }
+
+
+
+    /// 輪郭つきのノイズ予測。**毎ステップ 2 モデル回る**（ControlNet → 残差つき UNet）。
+    ///
+    /// ControlNet が返す 13 本の残差をそのまま UNet の入力に差す。名前は
+    /// `pipeline_config.json` の `control` セクションが唯一の情報源で、Swift 側には書かない。
+    public func predictNoise(
+        sample: Tensor,
+        timestep: Float,
+        encoderHiddenStates: Tensor,
+        control: Tensor
+    ) async throws -> Tensor {
+        guard let controlNet, let controlledUNet,
+              let controlNetIO, let controlledUNetIO else {
+            throw IconDiffusionError.unsupportedDevice(
+                "輪郭を条件に与える経路が載っていません（Stage 5 を --controlnet 付きで実行してください）"
+            )
+        }
+        let shared = [
+            precision.makeNDArray(sample.values, shape: sample.shape),
+            precision.makeNDArray([timestep], shape: [1]),
+            precision.makeNDArray(encoderHiddenStates.values, shape: encoderHiddenStates.shape),
+        ]
+        var controlInputs: [String: NDArray] = [:]
+        for (name, array) in zip(controlNetIO.inputs, shared) { controlInputs[name] = array }
+        controlInputs[controlNetIO.inputs[3]] =
+            precision.makeNDArray(control.values, shape: control.shape)
+
+        var residuals: InferenceFunction.Outputs
+        do {
+            residuals = try await controlNet.run(inputs: controlInputs)
+        } catch {
+            throw IconDiffusionError.backendFailure(
+                "predictNoise(control): \(error.localizedDescription)")
+        }
+
+        var unetInputs: [String: NDArray] = [:]
+        for (name, array) in zip(controlledUNetIO.inputs, shared) { unetInputs[name] = array }
+        for name in controlNetIO.outputs {
+            guard let value = residuals.remove(name), let array = value.ndArray else {
+                throw IconDiffusionError.backendFailure(
+                    "predictNoise(control): 残差 \(name) がありません")
+            }
+            unetInputs[name] = array
+        }
+        return try await run(
+            controlledUNet, inputs: unetInputs, output: controlledUNetIO.output,
+            expecting: sample.shape, context: "predictNoise(control)"
         )
     }
 

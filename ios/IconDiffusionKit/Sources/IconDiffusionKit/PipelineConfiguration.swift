@@ -36,6 +36,9 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
     /// `add_exported_program` に渡す名前と 1 対 1 で対応しており、そこを変えたら
     /// ここも自動で変わる。無ければ nil で、backend は既知の契約にフォールバックする。
     public var io: [String: ModelIO]?
+    /// 輪郭を条件に与える経路の入出力契約。**載せていなければ nil。**
+    /// Swift 側に名前を書かないのは io と同じ理由（変換側を変えたときに静かに壊れる）
+    public var control: [String: ModelIO]?
 
     /// 1 モデルぶんの入出力仕様。
     public struct ModelIO: Codable, Sendable, Equatable {
@@ -125,6 +128,7 @@ public struct PipelineConfiguration: Codable, Sendable, Equatable {
         case bosTokenID = "bos_token_id"
         case eosTokenID = "eos_token_id"
         case io
+        case control
     }
 
     /// SD1.5 の既定値。`pipeline_config.json` が無い場面（テストや疎通確認）で使う。
