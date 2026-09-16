@@ -35,6 +35,11 @@ struct ContentView: View {
     /// タイムラインの地の色に左右される。** auto は輪郭の色に対して WCAG 1.4.11 の
     /// 3:1 を満たすパレット色を選ぶ
     @State private var background = "auto"
+    // 描くときの色。**拡散は回さない** — 色はラベル番号から引くだけなので
+    // 生成済みの候補に掛け直すだけで一瞬で変わる
+    @State private var inkColor = Color(red: 31/255, green: 42/255, blue: 68/255)
+    @State private var accentColor = Color(red: 255/255, green: 107/255, blue: 74/255)
+    @State private var mono = false
     /// 輪郭を条件に与えるか。**これが「被写体が現実の物に見えない」への答え**
     /// （Mac 側の実測で 58.3% -> 87.5%。docs/experiments.md Trial 19〜21）
     @State private var useControl = true
@@ -88,11 +93,30 @@ struct ContentView: View {
             Picker("背景", selection: $background) {
                 Text("自動").tag("auto")
                 Text("白").tag("white")
-                Text("ネイビー").tag("navy")
+                Text("主色").tag("ink")
                 Text("透過").tag("none")
             }
             .pickerStyle(.segmented)
             .onChange(of: background) { _, _ in restyleAll() }
+
+            HStack(spacing: 14) {
+                ColorPicker("主色", selection: $inkColor, supportsOpacity: false)
+                    .labelsHidden()
+                if !mono {
+                    ColorPicker("副色", selection: $accentColor, supportsOpacity: false)
+                        .labelsHidden()
+                }
+                Toggle("単色", isOn: $mono).fixedSize()
+                Spacer()
+                if !mono && !theme.isUsable {
+                    // 2 色は必ず隣り合うので、明るさが近いと見分けられない
+                    Text(String(format: "2 色が近すぎます %.1f:1", theme.pairContrast))
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .onChange(of: inkColor) { _, _ in restyleAll() }
+            .onChange(of: accentColor) { _, _ in restyleAll() }
+            .onChange(of: mono) { _, _ in restyleAll() }
             .onChange(of: useControl) { _, _ in refreshGlyph() }
 
             HStack(spacing: 12) {
@@ -226,12 +250,31 @@ struct ContentView: View {
         .onTapGesture { select(candidate) }
     }
 
+    /// いま描くときに使う色。**形と採点はこれを見ていない**ので、
+    /// 変えても候補の並び順は動かない
+    private var theme: IconShapes.Theme {
+        let ink = Self.rgb(inkColor)
+        return mono ? .mono(ink) : IconShapes.Theme(ink: ink, accent: Self.rgb(accentColor))
+    }
+
+    /// SwiftUI の Color を 0〜255 の RGB に落とす。sRGB 以外の色空間で
+    /// 渡ってくることがあるので、変換してから読む
+    private static func rgb(_ colour: Color) -> (r: Double, g: Double, b: Double) {
+        let resolved = UIColor(colour).cgColor
+        guard let converted = resolved.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                 intent: .defaultIntent, options: nil),
+              let parts = converted.components, parts.count >= 3 else {
+            return IconShapes.Theme.default.ink
+        }
+        return (Double(parts[0]) * 255, Double(parts[1]) * 255, Double(parts[2]) * 255)
+    }
+
     /// 背景を変えたときに掛け直す。拡散は回さないので一瞬で終わる
     private func restyleAll() {
         candidates = candidates.map { candidate in
             var updated = candidate
             let polished = IconShapes.polish(candidate.transparent, size: outputSize,
-                                             background: background)
+                                             background: background, theme: theme)
             guard let cgImage = polished.image.makeAlphaCGImage() else { return candidate }
             updated.processed = polished.image
             updated.cgImage = cgImage
@@ -377,7 +420,7 @@ struct ContentView: View {
                 let generated = try await pipeline.generateIcon(subject: subject, options: options)
                 let transparent = IconPostprocess.process(generated)
                 let polished = IconShapes.polish(transparent.image, size: outputSize,
-                                                 background: background)
+                                                 background: background, theme: theme)
                 guard let cgImage = polished.image.makeAlphaCGImage() else { continue }
                 let candidate = Candidate(id: index, raw: generated,
                                           transparent: transparent.image,

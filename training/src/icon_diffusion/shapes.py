@@ -23,7 +23,7 @@ import math
 import numpy as np
 from PIL import Image, ImageFilter
 
-from .postprocess import PALETTE
+from .postprocess import DEFAULT_THEME, PALETTE, Theme
 
 # 整形の既定値。面積は canvas 比、半径は 512px 換算の画素数
 DEFAULT_MIN_AREA = 0.0012      # これ未満の連結成分は捨てる（512px で約 315 画素 = 18px 角）
@@ -212,6 +212,7 @@ def render_smooth(
     blur: float = DEFAULT_BLUR,
     edge: float = 1.2,
     fit: dict | None = None,
+    theme: Theme | None = None,
 ) -> Image.Image:
     """地図をぼかした濃度場に変えてから描き直す。**これが「滑らかな線」の本体。**
 
@@ -242,10 +243,15 @@ def render_smooth(
     # 不透明度にすることに等しく、面積比のアンチエイリアスとして正しい
     slope = max((2.5 * max(source_blur, 0.35) * ratio) / max(edge, 0.5), 1.0)
 
+    # **ラベル番号は PALETTE のまま、塗る色だけ theme から取る。** 番号と色を
+    # 分けてあるので、色を替えても形・採点・円クロップは 1 画素も変わらない
+    active = theme or DEFAULT_THEME
+    colours = active.colours
+
     pieces: list[tuple[int, int, np.ndarray]] = []
     for value in range(len(PALETTE)):
         mask = labels == value
-        if not mask.any():
+        if not mask.any() or not active.draws(value):
             continue
         field = Image.fromarray((mask * 255).astype(np.uint8), "L")
         if blur > 0:
@@ -271,7 +277,7 @@ def render_smooth(
     accumulated = np.zeros((size, size), dtype=np.float32)
     for _, value, alpha in sorted(pieces, key=lambda item: -item[0]):
         blend = alpha[..., None]
-        rgb = PALETTE[value][None, None, :] * blend + rgb * (1.0 - blend)
+        rgb = colours[value][None, None, :] * blend + rgb * (1.0 - blend)
         accumulated = alpha + accumulated * (1.0 - alpha)
 
     rgba = np.concatenate([rgb, accumulated[..., None] * 255.0], axis=2)
@@ -364,6 +370,7 @@ def polish(
     edge: float = 1.2,
     fit: bool = True,
     background: str = "none",
+    theme: Theme | None = None,
 ) -> tuple[Image.Image, dict]:
     """透過済みの画像を「整えて滑らかに描き直し」、同時に採点する。
 
@@ -383,7 +390,7 @@ def polish(
     cleaned = clean_labels(labels, min_area=min_area, min_hole=min_hole,
                            open_radius=open_radius)
     report = shape_report(cleaned, mush=mush)
-    report.update(icon_fit.legibility_report(cleaned))
+    report.update(icon_fit.legibility_report(cleaned, theme=theme))
 
     drawn = cleaned
     plan = None
@@ -395,12 +402,13 @@ def polish(
         report["fit_scale"] = plan["scale"]
         report["scraps"] = float((cleaned >= 0).sum() - (drawn >= 0).sum()) / \
             max(float((cleaned >= 0).sum()), 1.0)
-    rendered = render_smooth(drawn, size=size, blur=blur, edge=edge, fit=plan)
+    rendered = render_smooth(drawn, size=size, blur=blur, edge=edge, fit=plan,
+                             theme=theme)
 
     if background == "auto":
-        background = icon_fit.choose_background(drawn)
+        background = icon_fit.choose_background(drawn, theme)
     report["background"] = background
     if background != "none":
         # 輪郭の色と背景色のコントラスト比。WCAG 1.4.11 は図形に 3:1 を求める
-        report["background_contrast"] = icon_fit.background_contrast(drawn, background)
-    return icon_fit.compose_background(rendered, background), report
+        report["background_contrast"] = icon_fit.background_contrast(drawn, background, theme)
+    return icon_fit.compose_background(rendered, background, theme), report

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections import deque
 
+from dataclasses import dataclass
+
 import numpy as np
 from PIL import Image
 
@@ -157,6 +159,93 @@ PALETTE = np.array([
     [0xFF, 0x6B, 0x4A],   # coral
     [0xFF, 0xFF, 0xFF],   # white（ハイライトや抜き）
 ], dtype=np.float32)
+
+
+@dataclass(frozen=True)
+class Theme:
+    """描くときの色。**ラベル番号と色を切り離して持つ。**
+
+    整形も採点も円クロップも「どのパレット色か」の**番号**の地図の上で動いていて、
+    色になるのは `render_smooth` の最後の一行だけ。だから色を差し替えても形は
+    1 画素も変わらない。ここを型で分けておかないと、利用者が色を選べるようにしたとき
+    採点の基準まで一緒に動いてしまう。
+
+    量子化（`snap_to_palette`）は `PALETTE` のままにすること。学習データが
+    ネイビー + コーラル + 白なので、「モデルがどの色を塗ろうとしたか」は元の 2 色で
+    判定するのが正しい。差し替えるのは**描くとき**だけ。
+    """
+
+    ink: tuple[int, int, int]        # ラベル 0（学習データのネイビーに当たる）
+    accent: tuple[int, int, int]     # ラベル 1（同コーラル）
+    # ラベル 2（抜き）。**None なら描かず、地の色を透かせる。**
+    # 抜きは本来「地が見えている部分」で、独立した色ではない（Material Symbols も同じ）。
+    # 白で固定すると、白が輪郭に出た絵では白地が必ず 1.0:1 で失格になり、背景選びが
+    # 逃げ道の #121212 に落ちる。単色では抜きが形の主役になるので、ここが効く
+    counter: tuple[int, int, int] | None = None
+
+    @property
+    def colours(self) -> np.ndarray:
+        """`PALETTE` と同じ形の配列。行の順番がラベル番号に対応する。
+
+        `counter` が None のときも形だけは 3 行返す（描くかどうかは `draws` が決める）。
+        """
+        counter = self.counter if self.counter is not None else (255, 255, 255)
+        return np.array([self.ink, self.accent, counter], dtype=np.float32)
+
+    def draws(self, label: int) -> bool:
+        """そのラベルを塗るか。抜きを地に任せる設定では 2 を塗らない。"""
+        return not (label == COUNTER_LABEL and self.counter is None)
+
+    @property
+    def is_mono(self) -> bool:
+        return self.ink == self.accent
+
+    @classmethod
+    def mono(cls, ink: tuple[int, int, int],
+             counter: tuple[int, int, int] | None = None) -> "Theme":
+        """単色。**2 色目を 1 色目と同じにするだけ**で、別の経路は要らない。
+
+        2 色の境目は地の色の細い輪として残るので、レンズや鍵穴は読める。
+        """
+        return cls(ink=ink, accent=ink, counter=counter)
+
+    def pair_contrast(self) -> float:
+        """2 色どうしのコントラスト比。**2 色は必ず隣り合う**ので、ここが効く。"""
+        from .icon_fit import contrast_ratio  # noqa: PLC0415  循環参照を避ける
+        return contrast_ratio(np.array(self.ink, dtype=np.float32),
+                              np.array(self.accent, dtype=np.float32))
+
+    def validate(self) -> None:
+        """使えない組み合わせを弾く。
+
+        **地とのコントラストはここで見ない。** 「2 色の両方が 3:1 を満たす地」は
+        現行のネイビー + コーラルでも存在せず、プロジェクトは既に
+        「背景に接している色だけを輪郭の長さで数える」規則で解いている
+        （docs/experiments.md Trial 14）。ここで見るのは**互いに隣り合う 2 色**だけ。
+        """
+        if self.is_mono:
+            return
+        ratio = self.pair_contrast()
+        if ratio < MIN_PAIR_CONTRAST:
+            raise ValueError(
+                f"2 色のコントラストが {ratio:.2f}:1 で、WCAG 1.4.11 の "
+                f"{MIN_PAIR_CONTRAST}:1 に足りません。2 色は必ず隣り合うので、"
+                f"明るさの近い色どうしは見分けられません（例: 青 #2563EB と "
+                f"水色 #3B82F6 は 1.41:1）。"
+            )
+
+
+# WCAG 2.1 の 1.4.11（非テキストコントラスト）が求める比
+MIN_PAIR_CONTRAST = 3.0
+
+COUNTER_LABEL = 2   # パレットの 3 行目（抜き）
+
+# **抜きは既定で地に任せる。** 96 枚で測ると、白で塗る従来のやり方より
+# WCAG 1.4.11 の 3:1 を満たす割合が 51% -> 82%（中央値 5.06 -> 14.26:1）に上がり、
+# パレット外の逃げ道 #121212 に落ちる絵が 10 枚 -> 0 枚になった。形の点は 0.579 で不変
+# （色はラベル番号と切り離してあるので、形には触れない）。
+# 白で塗る従来の挙動が要るときは counter=(255, 255, 255) を渡す
+DEFAULT_THEME = Theme(ink=(0x1F, 0x2A, 0x44), accent=(0xFF, 0x6B, 0x4A))
 
 
 def snap_to_palette(image: "Image.Image", *, feather: float = 1.0) -> "Image.Image":

@@ -147,3 +147,70 @@ struct IconFitTests {
         #expect(alphas.contains(255))
     }
 }
+
+/// 色を差し替えても形が変わらないこと、色の選択が参照実装と一致することを見る。
+/// 期待値は同じ入力を Python の `shapes.polish(..., theme=...)` に通して得た値。
+struct IconThemeTests {
+    /// 64x64: ネイビーの正方形（10..53）の中心にコーラルの丸（半径 9）
+    private func fixture() -> GeneratedImage {
+        let size = 64
+        var rgba = [UInt8](repeating: 0, count: size * size * 4)
+        func paint(_ x: Int, _ y: Int, _ colour: (UInt8, UInt8, UInt8)) {
+            let offset = (y * size + x) * 4
+            rgba[offset] = colour.0; rgba[offset + 1] = colour.1
+            rgba[offset + 2] = colour.2; rgba[offset + 3] = 255
+        }
+        for y in 10..<54 { for x in 10..<54 { paint(x, y, (0x1F, 0x2A, 0x44)) } }
+        for y in 0..<64 {
+            for x in 0..<64 where (x - 32) * (x - 32) + (y - 32) * (y - 32) <= 81 {
+                paint(x, y, (0xFF, 0x6B, 0x4A))
+            }
+        }
+        return GeneratedImage(width: size, height: size, rgba: rgba)
+    }
+
+    private func pixel(_ image: GeneratedImage, _ x: Int, _ y: Int) -> (Int, Int, Int) {
+        let offset = (y * image.width + x) * 4
+        return (Int(image.rgba[offset]), Int(image.rgba[offset + 1]), Int(image.rgba[offset + 2]))
+    }
+
+    @Test func 色を替えても形の点は変わらない() {
+        let image = fixture()
+        let base = IconShapes.polish(image, size: 64, background: "auto").report
+        for theme in [IconShapes.Theme.mono((0x1F, 0x2A, 0x44)),
+                      IconShapes.Theme(ink: (20, 83, 45), accent: (245, 183, 0))] {
+            let other = IconShapes.polish(image, size: 64, background: "auto", theme: theme).report
+            // 整形も採点もラベル番号の上で動くので、色を替えても 1 画素も変わらないはず
+            #expect(abs(other.score - base.score) < 1e-9)
+            #expect(other.parts == base.parts)
+            #expect(abs(other.coverage - base.coverage) < 1e-9)
+        }
+    }
+
+    @Test func 塗る色が参照実装と一致する() {
+        let image = fixture()
+        let cases: [(IconShapes.Theme?, (Int, Int, Int), (Int, Int, Int), Double)] = [
+            (nil, (31, 42, 68), (255, 107, 74), 14.2574),
+            (.mono((0x1F, 0x2A, 0x44)), (31, 42, 68), (31, 42, 68), 14.2574),
+            (IconShapes.Theme(ink: (20, 83, 45), accent: (245, 183, 0)),
+             (20, 83, 45), (245, 183, 0), 9.1109),
+        ]
+        for (theme, body, centre, contrast) in cases {
+            let out = IconShapes.polish(image, size: 64, background: "auto",
+                                        theme: theme ?? .default)
+            #expect(out.report.background == "white")
+            #expect(abs(out.report.backgroundContrast - contrast) < 1e-3)
+            #expect(pixel(out.image, 0, 0) == (255, 255, 255))   // 角は地の色
+            #expect(pixel(out.image, 16, 16) == body)
+            #expect(pixel(out.image, 32, 32) == centre)
+        }
+    }
+
+    @Test func 明るさの近い2色は弾かれる() {
+        // 2 色は必ず隣り合うので、互いに 3:1 を満たさない組み合わせは使えない
+        #expect(!IconShapes.Theme(ink: (37, 99, 235), accent: (59, 130, 246)).isUsable)
+        #expect(IconShapes.Theme(ink: (20, 83, 45), accent: (245, 183, 0)).isUsable)
+        #expect(IconShapes.Theme.default.isUsable)
+        #expect(IconShapes.Theme.mono((37, 99, 235)).isUsable)   // 単色は対象外
+    }
+}

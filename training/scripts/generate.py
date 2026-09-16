@@ -72,6 +72,32 @@ def flatten_for_sheet(image: Image.Image) -> Image.Image:
     return canvas.convert("RGB")
 
 
+def parse_colour(text: str) -> tuple[int, int, int]:
+    """`#RRGGBB` を読む。**torch が要らない**ので --help と引数チェックがここで完結する。"""
+    value = text.strip().lstrip("#")
+    if len(value) != 6 or any(c not in "0123456789abcdefABCDEF" for c in value):
+        raise SystemExit(f"色は #RRGGBB の形で指定してください: {text!r}")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))   # type: ignore[return-value]
+
+
+def build_theme(args) -> "Theme | None":
+    """引数から描くときの色を作る。指定が無ければ None（既定の 2 色）。
+
+    **重い依存を引かない。** `Theme` は numpy しか要らないので、ここで読み込んでよい。
+    """
+    if not (args.ink or args.accent or args.mono or args.counter_white):
+        return None
+    from icon_diffusion.postprocess import DEFAULT_THEME, Theme  # noqa: PLC0415
+
+    ink = parse_colour(args.ink) if args.ink else DEFAULT_THEME.ink
+    accent = ink if args.mono else (
+        parse_colour(args.accent) if args.accent else DEFAULT_THEME.accent)
+    counter = (255, 255, 255) if args.counter_white else None
+    theme = Theme(ink=ink, accent=accent, counter=counter)
+    theme.validate()   # 明るさの近い 2 色はここで弾く
+    return theme
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=None)
@@ -114,8 +140,18 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--polish", action="store_true",
                         help="形を整えて滑らかに描き直す（ゴミ取り・穴埋め・輪郭の平滑化 + "
                              "パレット量子化）。--transparent を含む。--snap-palette は不要")
+    output.add_argument("--ink", default=None, metavar="#RRGGBB",
+                        help="主色（既定はネイビー #1F2A44）。**形と採点は色を見ていない**ので、"
+                             "ここを変えても絵の善し悪しは変わらない")
+    output.add_argument("--accent", default=None, metavar="#RRGGBB",
+                        help="副色（既定はコーラル #FF6B4A）。--ink と同じ色にすると単色になる。"
+                             "2 色は必ず隣り合うので、互いに 3:1 以上でないと弾かれる")
+    output.add_argument("--mono", action="store_true",
+                        help="単色にする（--accent を --ink と同じにするのと同じ）")
+    output.add_argument("--counter-white", action="store_true",
+                        help="抜きを白で塗る（既定は地に任せる）。従来の挙動に戻したいとき用")
     output.add_argument("--background", default="none",
-                        choices=["none", "auto", "white", "navy", "coral", "dark"],
+                        choices=["none", "auto", "white", "ink", "accent", "navy", "coral", "dark"],
                         help="敷く背景。SNS のアイコンは円に切り抜かれるので、透過のままだと"
                              "タイムラインの地の色に左右される。auto は輪郭の色に対して"
                              "WCAG 1.4.11 の 3:1 を満たす色を選ぶ（--polish と併用）")
@@ -128,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--no-sheet", action="store_true", help="コンタクトシートを作らない")
 
     args = parser.parse_args(argv)
+    theme = build_theme(args)
 
     cfg = load_config(args.config)
     steps = args.steps or cfg.preview.steps
@@ -224,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
                 # 整形は量子化を内側でやる。--snap-palette と併用しても壊れないが不要
                 image, report = shapes.polish(image, size=args.polish_size,
                                               fit=not args.no_fit,
-                                              background=args.background)
+                                              background=args.background,
+                                              theme=theme)
                 purity = palette_purity(image)
             elif args.snap_palette:
                 image = snap_to_palette(image)

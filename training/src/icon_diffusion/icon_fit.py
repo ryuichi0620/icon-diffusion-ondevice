@@ -22,7 +22,7 @@ import math
 import numpy as np
 from PIL import Image
 
-from .postprocess import PALETTE
+from .postprocess import DEFAULT_THEME, PALETTE, Theme
 
 # 内接円の内側にどれだけ余白を残すか。資料の「四隅は使わない・捨て代を設ける」に対応
 SAFE_RATIO = 0.92
@@ -188,7 +188,8 @@ def plan_fit(
             "outside_before": outside, "limited_by": limited_by}
 
 
-def legibility_report(labels: np.ndarray, *, small: int = 48) -> dict:
+def legibility_report(labels: np.ndarray, *, small: int = 48,
+                      theme: Theme | None = None) -> dict:
     """小サイズでの成立性を測る。資料の「検証」チェックリストに対応。
 
     - `survive`  … 48px に落としたとき残る塗りの割合。細い線はここで消える
@@ -214,7 +215,7 @@ def legibility_report(labels: np.ndarray, *, small: int = 48) -> dict:
 
     areas = [int((labels == value).sum()) for value in range(len(PALETTE))]
     dominant = int(np.argmax(areas))
-    colour = PALETTE[dominant]
+    colour = (theme or DEFAULT_THEME).colours[dominant]
     grayscale = abs(relative_luminance(colour) - 1.0)
 
     return {
@@ -229,13 +230,35 @@ def legibility_report(labels: np.ndarray, *, small: int = 48) -> dict:
 
 # --------------------------------------------------------------------------- 背景
 
+# 資料が避けろと言う純黒ではなく #121212。暗所でのハレーションを避けるため
+DARK = np.array([0x12, 0x12, 0x12], dtype=np.float32)
+WHITE = np.array([255, 255, 255], dtype=np.float32)
+
+# パレット内の色を優先して敷く順。`dark` は最後の逃げ道
+BACKGROUND_ORDER = ("white", "ink", "accent")
+
+
+def backgrounds(theme: Theme | None = None) -> dict[str, np.ndarray | None]:
+    """敷ける背景色。**利用者が色を選んだら、敷ける色もその 2 色になる。**
+
+    「トンマナ統一」（Trial 14）はパレットが固定だから成り立つ話ではなく、
+    「絵に使っている色で地も作る」という規則。だから theme に追随させる。
+    """
+    colours = (theme or DEFAULT_THEME).colours
+    return {
+        "none": None,
+        "white": WHITE,
+        "ink": colours[0],
+        "accent": colours[1],
+        "dark": DARK,
+    }
+
+
+# 既定のパレットでの背景表。**名前は残す**（設定ファイルや CLI が navy / coral で書ける）
 BACKGROUNDS = {
-    "none": None,
-    "white": np.array([255, 255, 255], dtype=np.float32),
+    **backgrounds(),
     "navy": PALETTE[0],
     "coral": PALETTE[1],
-    # 資料が避けろと言う純黒ではなく #121212。暗所でのハレーションを避けるため
-    "dark": np.array([0x12, 0x12, 0x12], dtype=np.float32),
 }
 
 
@@ -265,18 +288,23 @@ def silhouette_colours(labels: np.ndarray, min_share: float = 0.10) -> list[int]
             if float((edge & (labels == value)).sum()) / total >= min_share]
 
 
-def background_contrast(labels: np.ndarray, style: str) -> float:
+def background_contrast(labels: np.ndarray, style: str,
+                        theme: Theme | None = None) -> float:
     """その背景を敷いたときの、輪郭に出ている色の最小コントラスト比。"""
-    colour = BACKGROUNDS.get(style)
+    table = {**BACKGROUNDS, **backgrounds(theme)} if theme else BACKGROUNDS
+    colour = table.get(style)
     if colour is None:
         return float("inf")
-    colours = silhouette_colours(labels)
-    if not colours:
+    active = theme or DEFAULT_THEME
+    # 塗らない抜きは地そのものなので、隣接色として数えない
+    values = [v for v in silhouette_colours(labels) if active.draws(v)]
+    if not values:
         return float("inf")
-    return min(contrast_ratio(PALETTE[value], colour) for value in colours)
+    palette = active.colours
+    return min(contrast_ratio(palette[value], colour) for value in values)
 
 
-def choose_background(labels: np.ndarray) -> str:
+def choose_background(labels: np.ndarray, theme: Theme | None = None) -> str:
     """輪郭の色に対して 3:1 を満たす背景のうち、**パレット内で最初に見つかったもの**。
 
     **コーラルは白地で 2.82:1 しかなく、WCAG 1.4.11 の 3:1 を満たさない。**
@@ -290,15 +318,16 @@ def choose_background(labels: np.ndarray) -> str:
     ink = labels >= 0
     if not ink.any():
         return "white"
-    for name in ("white", "navy", "coral"):
-        if background_contrast(labels, name) >= 3.0:
+    for name in BACKGROUND_ORDER:
+        if background_contrast(labels, name, theme) >= 3.0:
             return name
-    scores = {name: background_contrast(labels, name)
-              for name in ("white", "navy", "coral", "dark")}
+    scores = {name: background_contrast(labels, name, theme)
+              for name in (*BACKGROUND_ORDER, "dark")}
     return max(scores, key=scores.get)
 
 
-def compose_background(image: Image.Image, style: str) -> Image.Image:
+def compose_background(image: Image.Image, style: str,
+                       theme: Theme | None = None) -> Image.Image:
     """単色背景を敷く。**透過のままにしないのは、タイムラインの地の色に左右されないため**
     （資料の「背景色は単色を敷くと安定」。Apple もアプリアイコンに透過を認めていない）。
 
@@ -307,7 +336,7 @@ def compose_background(image: Image.Image, style: str) -> Image.Image:
     """
     if style == "none":
         return image
-    colour = BACKGROUNDS[style]
+    colour = {**BACKGROUNDS, **backgrounds(theme)}[style] if theme else BACKGROUNDS[style]
     background = Image.new("RGBA", image.size,
                            tuple(int(v) for v in colour) + (255,))
     background.alpha_composite(image.convert("RGBA"))

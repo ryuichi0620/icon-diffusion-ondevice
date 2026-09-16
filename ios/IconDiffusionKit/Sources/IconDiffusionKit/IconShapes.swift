@@ -11,12 +11,78 @@ import Foundation
 /// 依存は Foundation だけに抑えてある（Accelerate も CoreImage も使わない）。
 /// 512x512 で数十ミリ秒なので、1 枚 1.2 秒の生成に対して無視できる。
 public enum IconShapes {
-    /// 学習データのパレット（SOURCE.md の生成プロンプトで固定している 2 色 + 白）
+    /// 学習データのパレット（SOURCE.md の生成プロンプトで固定している 2 色 + 白）。
+    /// **これは「どのパレット色か」を決める物差しであって、描くときの色ではない。**
+    /// 描く色は `Theme` が持つ。参照実装は postprocess.py の PALETTE。
     static let palette: [(r: Double, g: Double, b: Double)] = [
         (0x1F, 0x2A, 0x44),   // deep navy
         (0xFF, 0x6B, 0x4A),   // coral
         (0xFF, 0xFF, 0xFF),   // white
     ]
+
+    /// 抜き（パレットの 3 行目）のラベル番号
+    static let counterLabel = 2
+
+    /// 描くときの色。**ラベル番号と色を切り離して持つ。**
+    ///
+    /// 整形も採点も円クロップも番号の地図の上で動いていて、色になるのは `render` の
+    /// 最後の一行だけ。だから色を差し替えても形は 1 画素も変わらない。
+    /// 参照実装は postprocess.py の `Theme`。
+    public struct Theme: Sendable, Equatable {
+        public typealias RGB = (r: Double, g: Double, b: Double)
+
+        /// ラベル 0（学習データのネイビーに当たる）
+        public let ink: RGB
+        /// ラベル 1（同コーラル）。`ink` と同じにすると単色になる
+        public let accent: RGB
+        /// ラベル 2（抜き）。**nil なら描かず、地の色を透かせる。**
+        ///
+        /// 抜きは本来「地が見えている部分」で、独立した色ではない。白で固定すると
+        /// 白が輪郭に出た絵では白地が必ず 1.0:1 で失格になり、背景選びが逃げ道の
+        /// #121212 に落ちる。96 枚の実測で 3:1 を満たす割合が 51% -> 82% に上がった
+        public let counter: RGB?
+
+        public init(ink: RGB, accent: RGB, counter: RGB? = nil) {
+            self.ink = ink
+            self.accent = accent
+            self.counter = counter
+        }
+
+        /// 単色。**2 色目を 1 色目と同じにするだけ**で、別の経路は要らない
+        public static func mono(_ ink: RGB, counter: RGB? = nil) -> Theme {
+            Theme(ink: ink, accent: ink, counter: counter)
+        }
+
+        public static let `default` = Theme(ink: (0x1F, 0x2A, 0x44), accent: (0xFF, 0x6B, 0x4A))
+
+        public var isMono: Bool { ink == accent }
+
+        /// ラベル番号に対応する色。`counter` が nil のときも形だけは 3 つ返す
+        var colours: [RGB] { [ink, accent, counter ?? (0xFF, 0xFF, 0xFF)] }
+
+        /// そのラベルを塗るか。抜きを地に任せる設定では 2 を塗らない
+        func draws(_ label: Int) -> Bool {
+            !(label == IconShapes.counterLabel && counter == nil)
+        }
+
+        /// 2 色どうしのコントラスト比。**2 色は必ず隣り合う**ので、ここが効く
+        public var pairContrast: Double {
+            IconFit.contrastRatio(ink, accent)
+        }
+
+        /// 使える組み合わせか。地とのコントラストはここで見ない
+        /// （「2 色の両方が 3:1 を満たす地」は既定の 2 色でも存在せず、
+        /// 「背景に接している色だけを輪郭の長さで数える」規則で既に解いてある）
+        public var isUsable: Bool { isMono || pairContrast >= IconFit.minContrast }
+
+        // タプルを持つ構造体は Equatable を自動合成できないので手で書く
+        public static func == (a: Theme, b: Theme) -> Bool {
+            a.ink == b.ink && a.accent == b.accent
+                && a.counter?.r == b.counter?.r
+                && a.counter?.g == b.counter?.g
+                && a.counter?.b == b.counter?.b
+        }
+    }
 
     // 参照実装の既定値。面積は canvas 比、半径は 512px 換算の画素数
     public static let defaultMinArea = 0.0012
@@ -59,7 +125,8 @@ public enum IconShapes {
                        blur: Double = defaultBlur,
                        edge: Double = 1.2,
                        fit: Bool = true,
-                       background: String = "none") -> Polished {
+                       background: String = "none",
+                       theme: Theme = .default) -> Polished {
         let width = image.width, height = image.height
         let labels = labelMap(image)
         let mush = mushRatio(image)
@@ -76,17 +143,18 @@ public enum IconShapes {
         }
 
         var rendered = render(drawn, width: width, height: height,
-                              size: size ?? width, blur: blur, edge: edge, plan: plan)
+                              size: size ?? width, blur: blur, edge: edge, plan: plan,
+                              theme: theme)
 
         var chosen = background
         if background == "auto" {
-            chosen = IconFit.chooseBackground(drawn, width: width, height: height)
+            chosen = IconFit.chooseBackground(drawn, width: width, height: height, theme: theme)
         }
         report.background = chosen
         if chosen != "none" {
             report.backgroundContrast = IconFit.backgroundContrast(
-                drawn, width: width, height: height, background: chosen)
-            rendered = IconFit.compose(rendered, background: chosen)
+                drawn, width: width, height: height, background: chosen, theme: theme)
+            rendered = IconFit.compose(rendered, background: chosen, theme: theme)
         }
         return Polished(image: rendered, report: report)
     }
@@ -407,7 +475,8 @@ public enum IconShapes {
     /// 行うので、出力を 1024px にしても輪郭が階段状にならない。
     static func render(_ labels: [Int8], width: Int, height: Int,
                        size: Int, blur: Double, edge: Double,
-                       plan: IconFit.Plan? = nil) -> GeneratedImage {
+                       plan: IconFit.Plan? = nil,
+                       theme: Theme = .default) -> GeneratedImage {
         let scale = plan?.scale ?? 1.0
         let ratio = Double(size) * scale / Double(width)
         // 縮小するときは、縮めた後のぼけ幅が同じになるよう元解像度で強めにぼかす
@@ -417,8 +486,11 @@ public enum IconShapes {
         // 全面が半透明の灰色になる（Mac 側で 170px へ縮めて実際に出した）
         let slope = max((2.5 * max(sourceBlur, 0.35) * ratio) / max(edge, 0.5), 1.0)
 
+        // **ラベル番号は palette のまま、塗る色だけ theme から取る**
+        let colours = theme.colours
+
         var pieces: [(area: Int, value: Int, alpha: [Float])] = []
-        for value in 0..<palette.count {
+        for value in 0..<palette.count where theme.draws(value) {
             var field = [Float](repeating: 0, count: width * height)
             var area = 0
             for index in 0..<(width * height) where labels[index] == Int8(value) {
@@ -440,7 +512,7 @@ public enum IconShapes {
         var rgb = [Float](repeating: 0, count: size * size * 3)
         var accumulated = [Float](repeating: 0, count: size * size)
         for piece in pieces.sorted(by: { $0.area > $1.area }) {
-            let colour = palette[piece.value]
+            let colour = colours[piece.value]
             for index in 0..<(size * size) {
                 let alpha = piece.alpha[index]
                 if alpha <= 0 { continue }
@@ -605,12 +677,37 @@ public enum IconFit {
 
     /// 敷ける背景。**#121212 はパレット外なので最後の逃げ道**（純黒を避けるのは
     /// 暗所でのハレーション対策。参照実装と同じ値）
-    public static let backgrounds: [(name: String, colour: (r: Double, g: Double, b: Double))] = [
-        ("white", (255, 255, 255)),
-        ("navy", (0x1F, 0x2A, 0x44)),
-        ("coral", (0xFF, 0x6B, 0x4A)),
-        ("dark", (0x12, 0x12, 0x12)),
-    ]
+    public static let backgrounds: [(name: String, colour: (r: Double, g: Double, b: Double))] =
+        backgrounds(for: .default)
+
+    /// WCAG 2.1 の 1.4.11（非テキストコントラスト）が求める比
+    public static let minContrast = 3.0
+
+    /// パレット内の色を優先して敷く順。`dark` は最後の逃げ道
+    public static let backgroundOrder = ["white", "ink", "accent"]
+
+    /// 敷ける背景。**利用者が色を選んだら、敷ける色もその 2 色になる。**
+    /// 「トンマナ統一」はパレットが固定だから成り立つ話ではなく、
+    /// 「絵に使っている色で地も作る」という規則なので theme に追随させる。
+    public static func backgrounds(for theme: IconShapes.Theme)
+        -> [(name: String, colour: (r: Double, g: Double, b: Double))] {
+        [
+            ("white", (255, 255, 255)),
+            ("ink", theme.ink),
+            ("accent", theme.accent),
+            ("dark", (0x12, 0x12, 0x12)),
+        ]
+    }
+
+    /// 既定のパレットでの名前。設定ファイルや保存済みの値が navy / coral で書ける
+    static func resolveBackground(_ name: String, theme: IconShapes.Theme)
+        -> (r: Double, g: Double, b: Double)? {
+        switch name {
+        case "navy": return IconShapes.Theme.default.ink
+        case "coral": return IconShapes.Theme.default.accent
+        default: return backgrounds(for: theme).first(where: { $0.name == name })?.colour
+        }
+    }
 
     /// 背景に接している色。**面積ではなく輪郭の長さで数える。**
     /// WCAG が求めるのは隣接色との比なので、内側の白（カップの中など）は数えない。
@@ -641,29 +738,30 @@ public enum IconFit {
     }
 
     public static func backgroundContrast(_ labels: [Int8], width: Int, height: Int,
-                                          background: String) -> Double {
-        guard let entry = backgrounds.first(where: { $0.name == background }) else {
-            return .infinity
-        }
-        let colours = silhouetteColours(labels, width: width, height: height)
-        guard !colours.isEmpty else { return .infinity }
-        return colours.map { value -> Double in
-            let ink = IconShapes.palette[value]
-            return contrastRatio((ink.r, ink.g, ink.b), entry.colour)
-        }.min() ?? .infinity
+                                          background: String,
+                                          theme: IconShapes.Theme = .default) -> Double {
+        guard let colour = resolveBackground(background, theme: theme) else { return .infinity }
+        // 塗らない抜きは地そのものなので、隣接色として数えない
+        let values = silhouetteColours(labels, width: width, height: height)
+            .filter { theme.draws($0) }
+        guard !values.isEmpty else { return .infinity }
+        let palette = theme.colours
+        return values.map { contrastRatio(palette[$0], colour) }.min() ?? .infinity
     }
 
     /// 3:1 を満たす背景のうち、**パレット内で最初に見つかったもの**。
     /// コントラスト最大で選ぶと大半が #121212 になり、パレット外の色で一貫性が崩れる。
-    public static func chooseBackground(_ labels: [Int8], width: Int, height: Int) -> String {
+    public static func chooseBackground(_ labels: [Int8], width: Int, height: Int,
+                                        theme: IconShapes.Theme = .default) -> String {
         guard labels.contains(where: { $0 >= 0 }) else { return "white" }
-        for name in ["white", "navy", "coral"] where
-            backgroundContrast(labels, width: width, height: height, background: name) >= 3.0 {
+        for name in backgroundOrder where
+            backgroundContrast(labels, width: width, height: height,
+                               background: name, theme: theme) >= minContrast {
             return name
         }
-        return backgrounds
-            .map { ($0.name, backgroundContrast(labels, width: width, height: height,
-                                                background: $0.name)) }
+        return (backgroundOrder + ["dark"])
+            .map { ($0, backgroundContrast(labels, width: width, height: height,
+                                           background: $0, theme: theme)) }
             .max(by: { $0.1 < $1.1 })?.0 ?? "white"
     }
 
@@ -769,9 +867,10 @@ public enum IconFit {
 extension IconFit {
     /// 単色背景を敷く。**透過のままにしないのは、タイムラインの地の色に左右されないため。**
     /// SNS 側が円に切り抜くので、背景は正方形いっぱいに塗る。
-    public static func compose(_ image: GeneratedImage, background: String) -> GeneratedImage {
-        guard let entry = backgrounds.first(where: { $0.name == background }) else { return image }
-        let base = (UInt8(entry.colour.r), UInt8(entry.colour.g), UInt8(entry.colour.b))
+    public static func compose(_ image: GeneratedImage, background: String,
+                               theme: IconShapes.Theme = .default) -> GeneratedImage {
+        guard let colour = resolveBackground(background, theme: theme) else { return image }
+        let base = (UInt8(colour.r), UInt8(colour.g), UInt8(colour.b))
         var rgba = image.rgba
         for index in 0..<(image.width * image.height) {
             let offset = index * 4
