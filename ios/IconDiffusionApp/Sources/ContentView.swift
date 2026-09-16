@@ -385,10 +385,19 @@ struct ContentView: View {
                                           cgImage: cgImage, transparency: transparent.transparency,
                                           report: polished.report, seed: seed)
                 candidates.append(candidate)
-                log(String(format: "候補 %d: %@（形 %.2f・透過 %.0f%%）", index + 1,
-                           candidate.ok ? "合格" : "不合格", polished.report.score,
-                           transparent.transparency * 100))
+                // 内訳まで出す。点だけだと、目で見て良い絵が落ちたときに
+                // どの項目が効いたのか実機では追えない
+                let r = polished.report
+                log(String(format:
+                    "候補 %d: %@（形 %.2f｜被覆 %.2f・塊 %d・散り %.2f・粗さ %.2f・"
+                    + "余白 %.3f・左右 %.2f・中間色 %.2f・透過 %.0f%%）",
+                    index + 1, candidate.ok ? "合格" : "不合格", r.score,
+                    r.coverage, r.parts, r.stray, r.rough, r.margin, r.symmetry,
+                    r.mush, transparent.transparency * 100))
                 saveForInspection(polished.image, name: "candidate\(index + 1).png")
+                // 採点の入力そのもの。これが無いと、実機の点と Mac の参照実装を
+                // 同じ入力で突き合わせられない
+                saveForInspection(transparent.image, name: "input\(index + 1).png")
             }
 
             let passed = candidates.filter(\.ok)
