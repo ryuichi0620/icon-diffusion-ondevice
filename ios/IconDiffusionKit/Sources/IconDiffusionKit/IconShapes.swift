@@ -70,6 +70,24 @@ public enum IconShapes {
             IconFit.contrastRatio(ink, accent)
         }
 
+        /// 2 色の明暗の開き。`(相対輝度 + 0.05)` の比で見る
+        public var luminanceSpread: Double {
+            let a = IconFit.relativeLuminance(ink) + 0.05
+            let b = IconFit.relativeLuminance(accent) + 0.05
+            return max(a, b) / min(a, b)
+        }
+
+        /// **2 色とも同じ地に対して 3:1 を満たせるか。**
+        ///
+        /// 暗い側に `(L_bg+.05)/(L_a+.05) >= 3`、明るい側に `(L_b+.05)/(L_bg+.05) >= 3` が
+        /// 同時に要るので、2 色は `3 x 3 = 9` 倍以上離れていなければならない。
+        /// **既定のネイビー + コーラルは 5.1 倍しかなく、両色が地に接する絵では
+        /// どの地を敷いても 3:1 に届かない。** 観測され続けた 2.82:1 の正体はこれで、
+        /// 不具合ではなくパレットの選び方の帰結。単色ならこの制約は消える。
+        public var backgroundAchievable: Bool {
+            isMono || luminanceSpread >= IconFit.minContrast * IconFit.minContrast
+        }
+
         /// 使える組み合わせか。地とのコントラストはここで見ない
         /// （「2 色の両方が 3:1 を満たす地」は既定の 2 色でも存在せず、
         /// 「背景に接している色だけを輪郭の長さで数える」規則で既に解いてある）

@@ -112,6 +112,11 @@ struct ContentView: View {
                     // 2 色は必ず隣り合うので、明るさが近いと見分けられない
                     Text(String(format: "2 色が近すぎます %.1f:1", theme.pairContrast))
                         .font(.caption).foregroundStyle(.orange)
+                } else if !theme.backgroundAchievable {
+                    // 9 倍離れていないと、どの地を敷いても片方が 3:1 に届かない
+                    Text(String(format: "明暗の開き %.1f倍（地との 3:1 には 9 倍要る）",
+                                theme.luminanceSpread))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .onChange(of: inkColor) { _, _ in restyleAll() }
@@ -178,6 +183,7 @@ struct ContentView: View {
             await prewarm()
             if mode == "generate" {
                 await generateCandidates()
+                saveThemeVariants()
             }
             log("自動実行を終えました")
         }
@@ -454,6 +460,28 @@ struct ContentView: View {
             }
         } catch {
             log("失敗: \(error.localizedDescription)")
+        }
+    }
+
+    /// 選んだ候補を色違いで書き出す。**端末側の色の差し替えを実際に確かめるため。**
+    /// 拡散は回らない（色はラベル番号から引くだけ）ので、生成 1 回ぶんで全部出る。
+    private func saveThemeVariants() {
+        guard let best = candidates.first(where: { $0.id == selectedID }) ?? candidates.first
+        else { return }
+        let navy = IconShapes.Theme.default.ink
+        let variants: [(String, IconShapes.Theme)] = [
+            ("default", .default),
+            ("mono", .mono(navy)),
+            ("green-gold", IconShapes.Theme(ink: (20, 83, 45), accent: (245, 183, 0))),
+            ("purple-pink", IconShapes.Theme(ink: (76, 29, 149), accent: (244, 114, 182))),
+        ]
+        for (name, theme) in variants {
+            let out = IconShapes.polish(best.transparent, size: outputSize,
+                                        background: "auto", theme: theme)
+            saveForInspection(out.image, name: "theme-\(name).png")
+            log(String(format: "色 %@: 形 %.2f（不変であるべき）・背景 %@・地との差 %.1f:1",
+                       name, out.report.score, out.report.background,
+                       out.report.backgroundContrast))
         }
     }
 

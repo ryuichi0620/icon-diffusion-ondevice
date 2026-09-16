@@ -215,6 +215,27 @@ class Theme:
         return contrast_ratio(np.array(self.ink, dtype=np.float32),
                               np.array(self.accent, dtype=np.float32))
 
+    def luminance_spread(self) -> float:
+        """2 色の明暗の開き。`(相対輝度 + 0.05)` の比で見る。"""
+        from .icon_fit import relative_luminance  # noqa: PLC0415
+        a = relative_luminance(np.array(self.ink, dtype=np.float32)) + 0.05
+        b = relative_luminance(np.array(self.accent, dtype=np.float32)) + 0.05
+        return max(a, b) / min(a, b)
+
+    def background_achievable(self) -> bool:
+        """**2 色とも同じ地に対して 3:1 を満たせるか。**
+
+        暗い側に `(L_bg+.05)/(L_a+.05) >= 3`、明るい側に `(L_b+.05)/(L_bg+.05) >= 3` が
+        同時に要るので、2 色は `3 x 3 = 9` 倍以上離れていなければならない。
+
+        **現行のネイビー + コーラルは 5.1 倍しかなく、両色が地に接する絵では
+        どの地を敷いても 3:1 に届かない。** ずっと観測されていた 2.82:1 の正体はこれで、
+        コードの不具合ではなくパレットの選び方の帰結。だから `choose_background` は
+        「背景に接している色だけを輪郭の長さで数える」規則で回避している
+        （docs/experiments.md Trial 14）。単色ならこの制約は消える。
+        """
+        return self.is_mono or self.luminance_spread() >= MIN_PAIR_CONTRAST ** 2
+
     def validate(self) -> None:
         """使えない組み合わせを弾く。
 
