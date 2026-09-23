@@ -290,7 +290,26 @@ def render_smooth(
 # 調整したもので、理論値ではない。** 別のモデル・別の被写体では要再調整。
 IDEAL_COVERAGE = (0.16, 0.46)   # 学習データの被写体占有率（約 70% の枠に収まる塗り）
 MAX_PARTS = 3                   # 意味のある塊の数。アイコンはこれ以下であってほしい
-MAX_ROUGH = 2.3                 # 輪郭の複雑さ（円 = 1.27 前後、ギザギザほど大きい）
+
+# 輪郭の複雑さ（円 = 1.27 前後）。**上限だけでなく下限が要る。**
+#
+# 2026-09-24 に ControlNet 生成 96 枚を目視判定と突き合わせて測り直した。
+# 以前は「2.3 を超えたら減点」だったが、**失敗の質が変わっていた**。
+# ControlNet を入れる前の失敗は「破片が散る・ギザギザ」で、複雑さは欠陥の印だった。
+# いまの失敗は**「中身が無い」**（空の長方形、ただの矢印）で、これは採点から見ると
+# 「単純・1 塊・輪郭が滑らか」＝理想の絵になってしまう。実際、空の長方形が 1.00 点、
+# よくできた買い物カートが 0.00 点という逆転が起きていた（目視との一致は 36.5%）。
+#
+# 目視で不合格にした 20 枚のうち、下限を割ったのが 6 枚、上限を超えたのが 2 枚。
+# **失敗は下側に寄っている。**
+IDEAL_ROUGH = (2.1, 5.0)
+MAX_ROUGH = IDEAL_ROUGH[1]      # 後方互換（この名前を読んでいる箇所のため）
+
+# 散りと中間色のしきい値も同じ測り直しで更新した。どちらも旧値は厳しすぎて、
+# **部品が複数ある正しい絵**（ロケットの翼・カートの車輪）を落としていた。
+# 項目自体は残してある（極端な破片・極端な色崩れは今も捕まえたい）。
+MAX_STRAY = 0.40                # 旧 0.03。良い絵の中央値が 0.029 で、ほぼ全部が引っかかっていた
+MAX_MUSH = 0.85                 # 旧 0.35。量子化で決定的に直る項目なので、もともと弱い信号
 
 
 def shape_report(labels: np.ndarray, *, mush: float = 0.0) -> dict:
@@ -338,12 +357,16 @@ def shape_report(labels: np.ndarray, *, mush: float = 0.0) -> dict:
         penalty += 2.5 * (IDEAL_COVERAGE[0] - coverage)
     elif coverage > IDEAL_COVERAGE[1]:
         penalty += 2.5 * (coverage - IDEAL_COVERAGE[1])
-    penalty += 1.2 * max(0.0, stray - 0.03)
+    penalty += 1.2 * max(0.0, stray - MAX_STRAY)
     penalty += 0.08 * max(0, parts - MAX_PARTS)
-    penalty += 0.35 * max(0.0, rough - MAX_ROUGH)
+    # **両側に引く。** 複雑すぎる絵も、単純すぎる（＝中身が無い）絵も等しく落とす
+    if rough < IDEAL_ROUGH[0]:
+        penalty += 0.35 * (IDEAL_ROUGH[0] - rough)
+    elif rough > IDEAL_ROUGH[1]:
+        penalty += 0.35 * (rough - IDEAL_ROUGH[1])
     # 色は量子化で決定的に直るので、形の欠点より軽く見る。強いブレは「モデルが
-    # 迷った絵」の目印として効くので、外れが 35% を超えた分だけ引く
-    penalty += 0.35 * max(0.0, mush - 0.35)
+    # 迷った絵」の目印として効くので、外れがしきい値を超えた分だけ引く
+    penalty += 0.35 * max(0.0, mush - MAX_MUSH)
     penalty += 0.5 * max(0.0, (0.02 - margin) / 0.02)
     penalty += 0.15 * max(0.0, 0.55 - symmetry)
 

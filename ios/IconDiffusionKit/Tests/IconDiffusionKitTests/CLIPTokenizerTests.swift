@@ -60,9 +60,11 @@ struct CLIPTokenizerTests {
     /// `<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[\p{L}]+|[\p{N}]|[^\s\p{L}\p{N}]+`
     /// と同じ結果になること。期待値は Python の `regex` モジュール（ICU と同じ Unicode プロパティ）
     /// で実際に照合して得たもの。
-    @Test(
-        "分割が CLIP の正規表現と一致する",
-        arguments: [
+    /// 分割の期待値。**型を明示してあるのは推論を軽くするため。**
+    /// 素のリテラルのままだと、タプルと入れ子配列の推論が重く、機械の負荷次第で
+    /// 「the compiler is unable to type-check this expression in reasonable time」で
+    /// ビルドが落ちる（2026-09-24 に実際に落ちた）。中身は変えていない。
+    static let splitCases: [(String, [String])] = [
             (
                 "an icon in ICONST style, a coffee cup, flat, minimal",
                 ["an", "icon", "in", "iconst", "style", ",", "a", "coffee", "cup", ",", "flat", ",", "minimal"]
@@ -82,8 +84,9 @@ struct CLIPTokenizerTests {
             ("tab\tand\nnewline", ["tab", "and", "newline"]),
             ("3.14 and -2", ["3", ".", "1", "4", "and", "-", "2"]),
             ("", []),
-        ]
-    )
+    ]
+
+    @Test("分割が CLIP の正規表現と一致する", arguments: splitCases)
     func splitMatchesCLIPPattern(input: String, expected: [String]) {
         #expect(CLIPTokenizer.split(input.lowercased()) == expected)
     }

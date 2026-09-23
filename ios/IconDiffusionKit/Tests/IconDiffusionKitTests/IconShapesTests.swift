@@ -40,7 +40,10 @@ struct IconShapesTests {
         #expect(abs(report.mush) < 1e-6)
         #expect(abs(report.margin - 0.25) < 1e-6)
         #expect(abs(report.symmetry - 1.0) < 1e-6)
-        #expect(abs(report.score - 1.0) < 1e-6)
+        // **この合成入力は「のっぺりした正方形」なので、粗さの下限を割って減点される。**
+        // 1.0 -> 0.659933 に変わったのは 2026-09-24 に粗さを両側の帯にしたため
+        // （中身の無い絵が満点になる逆転を直した）。値は参照実装から取り直したもの。
+        #expect(abs(report.score - 0.659933) < 1e-5)
     }
 
     @Test func 破片が消えて穴が埋まる() {

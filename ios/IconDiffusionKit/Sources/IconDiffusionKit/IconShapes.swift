@@ -410,7 +410,23 @@ public enum IconShapes {
     // 参照実装 shapes.py と同じ数字であること。片方だけ動かすと数字が繋がらなくなる
     static let idealCoverage = (low: 0.16, high: 0.46)
     static let maxParts = 3
-    static let maxRough = 2.3
+
+    /// 輪郭の複雑さ（円 = 1.27 前後）。**上限だけでなく下限が要る。**
+    ///
+    /// 2026-09-24 に ControlNet 生成 96 枚を目視判定と突き合わせて測り直した。
+    /// 以前は「2.3 を超えたら減点」だったが、**失敗の質が変わっていた**。
+    /// ControlNet を入れる前の失敗は「破片が散る・ギザギザ」で、複雑さは欠陥の印だった。
+    /// いまの失敗は**「中身が無い」**（空の長方形、ただの矢印）で、これは採点から見ると
+    /// 「単純・1 塊・輪郭が滑らか」＝理想の絵になってしまう。実際、空の長方形が 1.00 点、
+    /// よくできた買い物カートが 0.00 点という逆転が起きていた（目視との一致 36.5%）。
+    /// 両側の帯にすると 79.2% まで上がる（seed を分けた検証側でも 81.2%）。
+    static let idealRough = (low: 2.1, high: 5.0)
+    static let maxRough = idealRough.high   // 後方互換
+
+    /// 散りと中間色のしきい値も同じ測り直しで更新した。どちらも旧値は厳しすぎて、
+    /// **部品が複数ある正しい絵**（ロケットの翼・カートの車輪）を落としていた。
+    static let maxStray = 0.40   // 旧 0.03。良い絵の中央値が 0.029 でほぼ全部が引っかかっていた
+    static let maxMush = 0.85    // 旧 0.35。量子化で決定的に直るので、もともと弱い信号
     /// これ以上を「アイコンとして出せる形」とみなす。候補の合否表示に使う
     public static let passScore = 0.75
 
@@ -471,11 +487,16 @@ public enum IconShapes {
         } else if coverage > idealCoverage.high {
             penalty += 2.5 * (coverage - idealCoverage.high)
         }
-        penalty += 1.2 * max(0.0, stray - 0.03)
+        penalty += 1.2 * max(0.0, stray - maxStray)
         penalty += 0.08 * Double(max(0, parts - maxParts))
-        penalty += 0.35 * max(0.0, rough - maxRough)
+        // **両側に引く。** 複雑すぎる絵も、単純すぎる（＝中身が無い）絵も等しく落とす
+        if rough < idealRough.low {
+            penalty += 0.35 * (idealRough.low - rough)
+        } else if rough > idealRough.high {
+            penalty += 0.35 * (rough - idealRough.high)
+        }
         // 色は量子化で決定的に直るので形の欠点より軽く見る
-        penalty += 0.35 * max(0.0, mush - 0.35)
+        penalty += 0.35 * max(0.0, mush - maxMush)
         penalty += 0.5 * max(0.0, (0.02 - margin) / 0.02)
         penalty += 0.15 * max(0.0, 0.55 - symmetry)
 
