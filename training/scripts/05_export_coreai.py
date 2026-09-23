@@ -28,6 +28,7 @@ import argparse
 import json
 import shutil
 import sys
+from datetime import datetime
 import tempfile
 from pathlib import Path
 
@@ -410,6 +411,42 @@ def write_swift_resources(cfg, pipe, resources_dir: Path, model_path: Path,
     return config
 
 
+def check_freshness(model_path: Path, lora_dir: Path) -> bool:
+    """変換元が LoRA より古くないか見る。**古ければ True（＝止める）。**
+
+    Stage 5 は変換元の中身しか見ないので、Stage 4 を通し直し忘れると
+    **黙って古いモデルを書き出す。** 実際にそれが起きた: 09/13 に Min-SNR 版の
+    LoRA へ差し替えたのに Stage 4 を回しておらず、09/15 に書き出した実機の版は
+    09/06 の焼き込み（Min-SNR 前）のままだった。被写体一致 +8 ポイントぶんが
+    丸ごと落ちていて、実機で測り直すまで誰も気づかなかった。
+
+    日付の比較なので厳密ではない（同じ内容で焼き直しても新しくなる）。
+    止めるのではなく警告に留めてもよいが、**取り違えの代償が「実機で測り直し」**
+    なので、既定は止める側にしてある（`--allow-stale` で押し切れる）。
+    """
+    weights = lora_dir / "pytorch_lora_weights.safetensors"
+    unet = model_path / "unet"
+    if not weights.exists() or not unet.exists():
+        return False   # どちらか無ければ判断材料が無い。素通しする
+    lora_at = weights.stat().st_mtime
+    fused_at = unet.stat().st_mtime
+    if fused_at >= lora_at:
+        return False
+
+    def stamp(value: float) -> str:
+        return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
+
+    print(f"[stage5] 変換元が LoRA より古いです。", file=sys.stderr)
+    print(f"[stage5]   LoRA   {stamp(lora_at)}  {weights}", file=sys.stderr)
+    print(f"[stage5]   変換元 {stamp(fused_at)}  {unet}", file=sys.stderr)
+    print(f"[stage5] このまま書き出すと、いまの LoRA が入っていないモデルができます。",
+          file=sys.stderr)
+    print(f"[stage5] 先に Stage 4 を通してください: python scripts/04_fuse_lora.py",
+          file=sys.stderr)
+    print(f"[stage5] 意図した上でなら --allow-stale で続行できます。", file=sys.stderr)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=None)
@@ -438,6 +475,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-plain-unet", action="store_true",
                         help="--controlnet と併用しても素の UNet を残す（検証用。821MB 増える）")
     parser.add_argument("--skip-resources", action="store_true", help="Swift 資産の書き出しをしない")
+    parser.add_argument("--allow-stale", action="store_true",
+                        help="変換元が LoRA より古くても続行する（既定は止める）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -459,6 +498,9 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(model_path).is_dir():
         print(f"[stage5] 変換元がありません: {model_path}", file=sys.stderr)
         print("[stage5] 先に Stage 4 を実行してください: python scripts/04_fuse_lora.py", file=sys.stderr)
+        return 1
+
+    if check_freshness(model_path, cfg.train.output_dir) and not args.allow_stale:
         return 1
 
     # 重い依存はここまで遅らせる（--help と引数チェックは torch 無しで通る）
