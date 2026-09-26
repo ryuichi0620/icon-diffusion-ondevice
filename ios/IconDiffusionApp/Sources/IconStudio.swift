@@ -252,25 +252,6 @@ final class IconStudio {
 
     // MARK: 書き出し
 
-    /// プロフィール画像として端末に残す。次に開いたときもこれが出る
-    func saveAvatar() -> Bool {
-        guard let selected, let url = Self.avatarURL,
-              let data = Self.pngData(selected.cgImage) else { return false }
-        do {
-            try data.write(to: url, options: .atomic)
-            log("プロフィール画像を保存しました")
-            return true
-        } catch {
-            log("保存に失敗: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    static var avatarURL: URL? {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("avatar.png")
-    }
-
     /// 写真アプリに書き出す。**実際に SNS のアイコンに設定するにはここを通る**ので、
     /// 作って終わりにしない。追加のみの許可で足りる
     func saveToPhotos() {
@@ -294,7 +275,8 @@ final class IconStudio {
         }
     }
 
-    private static func pngData(_ image: CGImage) -> Data? {
+    /// PNG に符号化する。写真への書き出しと、プロフィール画像の保存の両方で使う
+    static func pngData(_ image: CGImage) -> Data? {
         let buffer = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(
             buffer as CFMutableData, UTType.png.identifier as CFString, 1, nil
