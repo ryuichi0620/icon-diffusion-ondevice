@@ -64,7 +64,10 @@ final class IconStudio {
     /// 出力解像度。整形は濃度場を拡大してから二値化するので、512 で作った絵でも
     /// 1024 で輪郭が階段にならない
     let outputSize = 1024
-    let candidateCount = 4
+    /// **1 枚だけ作る。** 4 枚並べて選ばせるのはやめた（選ぶ手間より作り直すほうが速く、
+    /// 並べると機械の点で順序を付けたくなるが、その点は人の判定と食い違う）。
+    /// 実機で 1 枚 5.4 秒
+    let candidateCount = 1
 
     private var pipeline: IconDiffusionPipeline?
 
@@ -159,6 +162,7 @@ final class IconStudio {
             log("生成中…（\(steps) ステップ / guidance \(guidance)）")
 
             let started = Date()
+            // ループは残してある。枚数を戻して比べたくなったときのため
             for index in 0..<candidateCount {
                 let base = Double(index) / Double(candidateCount)
                 let share = 1.0 / Double(candidateCount)
@@ -208,9 +212,9 @@ final class IconStudio {
             let passed = candidates.filter(\.ok)
             log(String(format: "完了 %.1f 秒。機械判定 %d/%d 通過",
                        Date().timeIntervalSince(started), passed.count, candidates.count))
-            // 最初の 1 枚は機械判定の点が最も高いものにしておく。**当てにはならない**が
-            // （人の判定と 10 枚中 7 枚しか合わない）、並びの先頭を決める根拠は他に無い。
-            // 選び直しは利用者がタップでする前提
+            // 点が最も高いものを採る。1 枚なら選択の余地は無いが、枚数を戻したときに
+            // 先頭が決まらなくなるので式は残す。**この点は当てにならない**
+            // （人の判定と 10 枚中 7 枚しか合わない）ので、良し悪しは人が見て決める
             if let best = candidates.max(by: { $0.report.score < $1.report.score }) {
                 select(best.id)
             }

@@ -9,15 +9,20 @@ import SwiftUI
 ///   - 明るい地と暗い地の両方に並べる（他人のタイムラインの地色は選べない）
 ///   - 機械判定の点は出さない（人の判定と 10 枚中 3 枚で食い違った。開発用の欄にだけ）
 ///
-/// 閉じ方は 2 つ。「使う」は選んだ絵を編集画面へ渡すだけで、**保存はしない**
-/// （保存するかどうかは編集画面の「保存」が決める）。
+/// **作るのは 1 枚で、できた絵はそのままプロフィール画像になる。** 候補から選ぶ段は
+/// 置いていない（4 枚見比べる手間より、気に入らなければ作り直すほうが速い）。
+/// 書き込むのは編集画面の「保存」だけなので、ここで差し替えてもまだ確定はしない。
+/// 「キャンセル」は開いたときの絵に戻す。
 struct IconStudioSheet: View {
     @Bindable var studio: IconStudio
-    /// 選んだ絵を編集画面へ返す
-    let onChoose: (CGImage) -> Void
+    /// 編集画面の下書き。生成したらここへ直接入る
+    @Binding var avatar: CGImage?
 
     @Environment(\.dismiss) private var dismiss
     @FocusState private var subjectFocused: Bool
+    /// 開いたときの絵。キャンセルで戻すために覚えておく
+    @State private var restore: CGImage?
+    @State private var captured = false
 
     var body: some View {
         NavigationStack {
@@ -25,8 +30,7 @@ struct IconStudioSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // 作る前は「何を描く？」が最初に来るべきで、空の丸ではない。
                     // プレビューは見るものが出てきてから現れる
-                    if studio.selected != nil { preview }
-                    if !studio.candidates.isEmpty || studio.isBusy { candidateRow }
+                    if avatar != nil { preview }
                     subjectSection
                     colourSection
                     backgroundSection
@@ -40,17 +44,22 @@ struct IconStudioSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("キャンセル") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("使う") {
-                        if let image = studio.selected?.cgImage { onChoose(image) }
+                    Button("キャンセル") {
+                        avatar = restore
                         dismiss()
                     }
-                    .fontWeight(.semibold)
-                    .disabled(studio.selected == nil)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完了") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
+        }
+        .onAppear {
+            // onAppear はシートが再表示されるたびに呼ばれうる。最初の 1 回だけ覚える
+            guard !captured else { return }
+            restore = avatar
+            captured = true
         }
     }
 
@@ -58,7 +67,7 @@ struct IconStudioSheet: View {
 
     private var preview: some View {
         VStack(spacing: 14) {
-            AvatarView(image: studio.selected?.cgImage, size: 132,
+            AvatarView(image: avatar, size: 132,
                        transparent: studio.background == "none")
                 .overlay(Circle().stroke(Color(.separator), lineWidth: 1))
                 .frame(maxWidth: .infinity)
@@ -81,7 +90,7 @@ struct IconStudioSheet: View {
     /// 明暗の両方に載せて見せる。背景「透過」を選ぶと、ここで片方に溶けるのが見える
     private func timelineRow(dark: Bool) -> some View {
         HStack(spacing: 10) {
-            AvatarView(image: studio.selected?.cgImage, size: 36,
+            AvatarView(image: avatar, size: 36,
                        transparent: studio.background == "none")
             VStack(alignment: .leading, spacing: 2) {
                 Text(dark ? "暗い背景のタイムライン" : "明るい背景のタイムライン")
@@ -97,46 +106,6 @@ struct IconStudioSheet: View {
                     in: RoundedRectangle(cornerRadius: 10))
         .foregroundStyle(dark ? Color.white : Color.black)
         .environment(\.colorScheme, dark ? .dark : .light)
-    }
-
-    // MARK: 候補
-
-    /// 候補は**生成した順**に並べる。点の高い順にしないのは、その点が人の判定と
-    /// 10 枚中 3 枚で食い違ったから。並べ替えると「上ほど良い」と誤解させる
-    private var candidateRow: some View {
-        HStack(spacing: 10) {
-            ForEach(0..<studio.candidateCount, id: \.self) { index in
-                candidateCell(index)
-            }
-        }
-    }
-
-    @ViewBuilder private func candidateCell(_ index: Int) -> some View {
-        let candidate = studio.candidates.first { $0.id == index }
-        let chosen = studio.selectedID == index
-        Button {
-            if candidate != nil { studio.select(index) }
-        } label: {
-            Group {
-                if let candidate {
-                    Image(decorative: candidate.cgImage, scale: 1)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fill)
-                        .background(studio.background == "none"
-                                    ? AnyView(Checkerboard()) : AnyView(Color.white))
-                } else {
-                    Color(.tertiarySystemFill)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(chosen ? Color.accentColor : Color(.separator),
-                                     lineWidth: chosen ? 3 : 1))
-        }
-        .buttonStyle(.plain)
-        .disabled(candidate == nil)
     }
 
     // MARK: 入力
@@ -236,7 +205,11 @@ struct IconStudioSheet: View {
         VStack(spacing: 8) {
             Button {
                 subjectFocused = false
-                Task { await studio.generate() }
+                Task {
+                    await studio.generate()
+                    // **できた絵はそのままプロフィール画像になる。** 選ぶ段は無い
+                    if let image = studio.selected?.cgImage { avatar = image }
+                }
             } label: {
                 Text(buttonLabel).frame(maxWidth: .infinity)
             }
@@ -261,8 +234,7 @@ struct IconStudioSheet: View {
 
     private var buttonLabel: String {
         if studio.isBusy { return "つくっています…" }
-        return studio.candidates.isEmpty
-            ? "\(studio.candidateCount) 枚つくる" : "もう一度つくる"
+        return studio.candidates.isEmpty ? "アイコンをつくる" : "もう一度つくる"
     }
 
     private func section<Content: View>(_ title: String,

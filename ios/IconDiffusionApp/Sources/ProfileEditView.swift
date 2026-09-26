@@ -65,7 +65,7 @@ struct ProfileEditView: View {
         }
         // 生成はさらに一段深いモーダル。**編集を中断せずに戻ってこられる**
         .sheet(isPresented: $showingStudio) {
-            IconStudioSheet(studio: studio) { chosen in avatar = chosen }
+            IconStudioSheet(studio: studio, avatar: $avatar)
         }
         .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in
