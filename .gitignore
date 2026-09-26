@@ -43,6 +43,7 @@ ios/IconDiffusionApp/IconDiffusionApp.xcodeproj/
 ios/IconDiffusionApp/Models/**
 !ios/IconDiffusionApp/Models/.gitkeep
 build/
+build-sim/
 DerivedData/
 .build/
 .swiftpm/

@@ -40,6 +40,9 @@ targets:
         # 端末は縦持ち前提。回転させても意味のある画面ではない
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_CFBundleDisplayName: Icon Diffusion
+        # 作ったアイコンを写真アプリへ書き出す（追加のみ）。
+        # ここを通らないと、実際に SNS のアイコンに設定できない
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: 作ったアイコンを写真に保存します。
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: ICON_DIFFUSION_COREAI
         SWIFT_VERSION: "6.0"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
