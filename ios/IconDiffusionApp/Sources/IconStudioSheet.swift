@@ -171,33 +171,26 @@ struct IconStudioSheet: View {
         }
     }
 
+    /// **常時出る解説は置かない。** 出すのは「この 2 色では作れない」ときだけ。
+    /// 地との 3:1 に届くかどうか（9 倍の規則）は、出しても直しようがないので黙る
     @ViewBuilder private var colourWarning: some View {
         let theme = studio.theme
         if !studio.mono && !theme.isUsable {
             // 2 色は必ず隣り合うので、明るさが近いと見分けられない
             Text(String(format: "2 色が近すぎます（%.1f:1）", theme.pairContrast))
                 .font(.caption2).foregroundStyle(.orange)
-        } else if !theme.backgroundAchievable {
-            // 9 倍離れていないと、どの地を敷いても片方が 3:1 に届かない
-            Text(String(format: "明暗の開きが %.1f 倍（地との 3:1 には 9 倍要ります）",
-                        theme.luminanceSpread))
-                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
     private var backgroundSection: some View {
         section("背景") {
-            VStack(alignment: .leading, spacing: 6) {
-                Picker("背景", selection: $studio.background) {
-                    Text("自動").tag("auto")
-                    Text("白").tag("white")
-                    Text("主色").tag("ink")
-                    Text("透過").tag("none")
-                }
-                .pickerStyle(.segmented)
-                Text("自動は、線の色に対して 3:1 の明暗差がつく地を選びます")
-                    .font(.caption2).foregroundStyle(.secondary)
+            Picker("背景", selection: $studio.background) {
+                Text("自動").tag("auto")
+                Text("白").tag("white")
+                Text("主色").tag("ink")
+                Text("透過").tag("none")
             }
+            .pickerStyle(.segmented)
         }
     }
 
