@@ -26,8 +26,8 @@ final class ProfileStore {
 
     init() {
         let defaults = UserDefaults.standard
-        displayName = defaults.string(forKey: Key.name) ?? "えごし"
-        handle = defaults.string(forKey: Key.handle) ?? "egoshi"
+        displayName = defaults.string(forKey: Key.name) ?? "こむぎ"
+        handle = defaults.string(forKey: Key.handle) ?? "_komugi0"
         bio = defaults.string(forKey: Key.bio) ?? "オンデバイスでアイコンを作っています。iPhone の中だけで完結する拡散モデルを実験中。"
         if let stored = defaults.object(forKey: Key.joined) as? Date {
             joined = stored
