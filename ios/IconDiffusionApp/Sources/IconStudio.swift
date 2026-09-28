@@ -66,8 +66,10 @@ final class IconStudio {
     let outputSize = 1024
     /// **1 枚だけ作る。** 4 枚並べて選ばせるのはやめた（選ぶ手間より作り直すほうが速く、
     /// 並べると機械の点で順序を付けたくなるが、その点は人の判定と食い違う）。
-    /// 実機で 1 枚 5.4 秒
-    let candidateCount = 1
+    /// 実機で 1 枚 5.4 秒。
+    /// 計測のときだけ起動引数 `-ICON_COUNT 2` で枚数を上書きできる
+    /// （2 枚目が速いか、同じ引っかかりが再現するかを 1 セッション内で見るため）
+    let candidateCount = Int(IconStudio.setting("ICON_COUNT") ?? "") ?? 1
 
     private var pipeline: IconDiffusionPipeline?
 
