@@ -535,7 +535,7 @@ public actor CoreAIBackend: DiffusionBackend {
             )
         }
         let values = try precision.scalars(of: array)
-        if ProcessInfo.processInfo.environment["ICON_DEBUG"] == "1" {
+        if Self.debugEnabled {
             // 入力側も測る。出力が変なとき、入力が既に変なのかここで分かる
             for name in inputs.keys.sorted() {
                 print("[stats]   \(context) 入力 \(name): \(Self.summarize(inputs[name]!, precision))")
@@ -545,12 +545,20 @@ public actor CoreAIBackend: DiffusionBackend {
         return try Tensor(shape: shape, values: values, context: "CoreAIBackend.\(context)")
     }
 
+    /// 統計を出すかどうか。環境変数と起動引数の両方から読む。
+    /// **devicectl では環境変数がアプリに届かない**ので、実機で値を見るには
+    /// `-ICON_DEBUG 1` の形が要る（UserDefaults が拾う）
+    static var debugEnabled: Bool {
+        if ProcessInfo.processInfo.environment["ICON_DEBUG"] == "1" { return true }
+        return UserDefaults.standard.string(forKey: "ICON_DEBUG") == "1"
+    }
+
     /// ICON_DEBUG=1 のとき、各段のテンソルの統計を出す。
     ///
     /// **絵が壊れたときにどこで壊れたかを特定するため。** 形は requireShape が見ているので、
     /// ここで見たいのは値のほう。Python 側の同じ段の値と突き合わせる。
     private static func debugLog(_ context: String, inputs: [String: NDArray], output: [Float]) {
-        guard ProcessInfo.processInfo.environment["ICON_DEBUG"] == "1" else { return }
+        guard Self.debugEnabled else { return }
         print("[stats] \(context) 出力 \(summary(output)) n=\(output.count)")
     }
 

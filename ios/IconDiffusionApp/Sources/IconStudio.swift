@@ -394,15 +394,16 @@ final class IconStudio {
         }
     }
 
-    /// 既定は ComputeUnitPlan.recommended（UNet=ANE / VAEDecoder=GPU）
+    /// 既定は ComputeUnitPlan.recommended（UNet=ANE / VAEDecoder=GPU）。
+    /// **環境変数は devicectl では届かない**ので、起動引数からも読む
+    /// （`-ICON_UNIT_TextEncoder gpu` の形）
     static func computeUnitPlan() -> CoreAIBackend.ComputeUnitPlan {
-        let env = ProcessInfo.processInfo.environment
         var plan = CoreAIBackend.ComputeUnitPlan.recommended
-        if let raw = env["ICON_UNIT"] {
+        if let raw = setting("ICON_UNIT") {
             plan = CoreAIBackend.ComputeUnitPlan(fallback: unit(raw))
         }
-        for model in ["TextEncoder", "UNet", "VAEDecoder"] {
-            if let raw = env["ICON_UNIT_\(model)"] {
+        for model in ["TextEncoder", "ControlNet", "UNet", "UNetControlled", "VAEDecoder"] {
+            if let raw = setting("ICON_UNIT_\(model)") {
                 plan.overrides[model] = unit(raw)
             }
         }
