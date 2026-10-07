@@ -347,6 +347,43 @@ int8 のまま GPU に逃がせば **117MB 減らせて、生成時間は変わ�
 （10.5 秒 → 9.7 秒）。TextEncoder は 1 回しか回らないので ANE から外す損は小さい。
 **まだ既定にはしていない。** 変えるなら複数の被写体で絵を確かめてから。
 
+#### 原因の正体（2026-10-08）
+
+ANE 向けに読み込ませると、ANE のコンパイラ（ANEC）が理由を吐いていた。
+
+    failed: groups / block / batch quantization not supported on ANEC
+      ← constexpr_blockwise_shift_scale_* に対して 73 件
+    error: 'anec.scaled_elementwise' op inferred type(s) 'memref<1x77x77x768xf16>'
+      are incompatible with return type(s) 'memref<1x1x77x768xf16>'
+
+**int8 の重みは `coreai.blockwise_shift_scale` に落ちる。ANEC はこの形を受け付けない。**
+`.aimodel` の MLIR を開くと、その演算がそのまま並んでいる。
+
+| モデル | 該当演算 | 重みとスケール | ANEC |
+| --- | --- | --- | --- |
+| TextEncoder int8 | 74 | 2 次元。`768x768` にスケール `768x1` | **拒否** |
+| VAEDecoder int8 | 40 | 36 個は畳み込み `512x4x3x3` にスケール `512x1x1x1` | 通る |
+
+設定はどちらも per-channel（軸 0）なのに結果が分かれた。畳み込みは軸が 4 本あって
+掛かる向きが一意に決まるが、2 次元の重みは `768x1` という「列」になり、
+系列長や隠れ次元との取り違えが起きる（上のエラーの `1x77x77x768` がそれ）。
+
+**スケールを 1 個（per-tensor）にすると ANEC が受け付けた。**
+
+| 書き出し方 | サイズ | 参照との PSNR | ANEC 警告 | ANE |
+| --- | --- | --- | --- | --- |
+| 量子化なし（いま出荷中） | 235MB | —（基準） | 0 件 | 動く |
+| int8 / per-channel | 118MB | 53.5 dB | **73 件** | **壊れる** |
+| **int8 / per-tensor** | **118MB** | 46.1 dB | **0 件** | **動く** |
+
+ANE `[-28.17, 32.97]` / CPU `[-28.19, 32.94]` / 参照 `[-28.09, 33.09]`。
+**117MB 減らして ANE に載せたままにできる。** ただし確かめたのは埋め込みの数値だけで、
+**この構成で絵を出していない。** 46 dB の粗さが絵に出るかは別途確認すること。
+
+**訂正: 「TextEncoder と VAEDecoder は同じ穴」も誤りだった。** VAE を Mac の ANE で
+読み込むとコンパイラは何も言わず、GPU / CPU / ANE の 3 つで値が一致する
+（min -1.8848 / -1.8848 / -1.8086）。VAE の発散は **iPhone の ANE でだけ**起き、未解明。
+
 ### 原因 2: VAEDecoder は ANE 上でだけ壊れる
 
     decodeLatent 出力   ANE:  [-13.27, 26.59]   ← 発散
