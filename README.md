@@ -31,7 +31,7 @@
 - **未確認** — UI を操作しての実機確認、写真アプリへの書き出し、
   TextEncoder の per-tensor int8（埋め込みの数値は合ったが、絵をまだ出していない）
 
-優先順位は **モデルの質が先**。端末側は通っているので、いまは触らなくてよい（[CLAUDE.md](CLAUDE.md)）。
+優先順位は **モデルの質が先**。端末側は通っているので、いまは触らなくてよい。
 
 ---
 
@@ -70,12 +70,9 @@
 
 ## 成果物（アーティファクト）
 
-### 発表・外部資料
+### 発表資料
 
-| 資料 | リンク |
-| --- | --- |
-| **スライド資料** | **（リンクは後で追加）** |
-| 企画の原本と文書のミラー（Notion） | [アイコン生成モデル — 少ステップ拡散モデルのオンデバイス化](https://app.notion.com/p/3c32bbb6de9d813783dbc708f4839a74) |
+- **スライド資料 — （リンクは後で追加）**
 
 ### リポジトリに入っているもの
 
@@ -200,13 +197,10 @@ docs/                企画・設計・データセット方針・実験ログ
 | [docs/architecture.md](docs/architecture.md) | 設計。モデルを 3 つに割る理由、ANE で壊れた原因、後処理の線引き |
 | [docs/dataset.md](docs/dataset.md) | データセット方針。枚数の効き方、権利まわり |
 | [docs/base-model-comparison.md](docs/base-model-comparison.md) | ベースモデルの比較（SD1.5 / FLUX.2 klein / Sana Sprint） |
-| [docs/plan.md](docs/plan.md) | 企画メモ（Notion 原本の内容をリポジトリに固定したもの） |
+| [docs/plan.md](docs/plan.md) | 企画メモ。最初に決めた狙いと段取り |
 | [training/README.md](training/README.md) | 学習パイプラインの詳細 |
 | [ios/IconDiffusionApp/README.md](ios/IconDiffusionApp/README.md) | アプリの画面構成と、実機に入れるまで |
 | [ios/IconDiffusionKit/README.md](ios/IconDiffusionKit/README.md) | Swift 側の実装状況 |
-| [CLAUDE.md](CLAUDE.md) | 作業時の取り決め |
-
-`docs/` に文書を足したら、Notion 側にも子ページとして追加する（[CLAUDE.md](CLAUDE.md) 参照）。
 
 ## ライセンス・権利まわり
 
