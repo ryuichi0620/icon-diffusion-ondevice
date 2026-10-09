@@ -55,7 +55,9 @@ xcuserdata/
 *.pem
 *.p12
 
-# ---------- Claude Code ----------
+# ---------- エージェント向けの作業メモ ----------
+# 取り決めの公開用は AGENTS.md。CLAUDE.md は手元だけに置く（中身は同じ）
+CLAUDE.md
 .claude/settings.local.json
 
 # diffusers から取得した学習スクリプトのキャッシュ
