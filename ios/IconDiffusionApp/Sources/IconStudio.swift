@@ -168,7 +168,10 @@ final class IconStudio {
             for index in 0..<candidateCount {
                 let base = Double(index) / Double(candidateCount)
                 let share = 1.0 / Double(candidateCount)
-                let seed = UInt64.random(in: 0..<UInt64.max)
+                // 既定は毎回ちがう絵。**A/B を比べるときだけ** 起動引数で固定する
+                // （`-ICON_SEED 42`。2 枚目以降は +1 していく）
+                let seed = (UInt64(Self.setting("ICON_SEED") ?? "") ?? UInt64.random(in: 0..<UInt64.max))
+                    &+ UInt64(index)
                 var options = IconDiffusionPipeline.Options(
                     steps: steps,
                     guidanceScale: guidance,
