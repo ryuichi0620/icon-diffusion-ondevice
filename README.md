@@ -89,6 +89,10 @@ python scripts/controlnet_style.py --prompts prompts.example.txt --out outputs/c
 設定値は [`training/configs/icon_lora.toml`](training/configs/icon_lora.toml) に集めてある。
 CLI の引数はその場で試すための上書きなので、恒久的な値はこのファイルに書く。
 
+**学習を飛ばして試せる。** 最新の LoRA（12.8MB）はリポジトリに入っているので、
+Stage 1・2 を通さずに Stage 3 以降をそのまま実行できる。ただし **Stage 2 は同じ場所
+（`training/outputs/icon-lora/`）に書くので、学習し直すとこの重みを上書きする。**
+
 ### 2. iPhone に載せる
 
 ```bash
@@ -133,14 +137,14 @@ venv を分ける理由は [training/requirements.txt](training/requirements.txt
 | デモアプリ（SNS のプロフィール画面を模した 3 層）| [`ios/IconDiffusionApp/`](ios/IconDiffusionApp) |
 | 実験ログ（Trial 0〜24。何を試し、なぜそれを選んだか）| [`docs/experiments.md`](docs/experiments.md) |
 | 学習データの被写体リストと出所の記録 | [`training/data/`](training/data) |
+| **アイコン風スタイル LoRA（最新版・12.8MB）** | [`training/outputs/icon-lora/pytorch_lora_weights.safetensors`](training/outputs/icon-lora/pytorch_lora_weights.safetensors) |
 
 ### 生成物（大きいのでリポジトリでは追跡していない）
 
 | 成果物 | 置き場所 | 実測 |
 | --- | --- | --- |
 | 学習データ 746 枚 | `training/data/raw/` | 373 被写体 × 2 枚。出所は `training/data/SOURCE.md` |
-| アイコン風スタイル LoRA | `training/outputs/icon-lora/` | rank 16・800 ステップ |
-| 焼き込み済みパイプライン | `training/outputs/fused/` | Stage 4 の出力 |
+| 焼き込み済みパイプライン | `training/outputs/fused/` | Stage 4 の出力。LoRA から作り直せる |
 | Core AI モデル 4 つ | `training/outputs/coreai/*.aimodel` | UNetControlled 821MB / ControlNet 345MB / TextEncoder 235MB / VAEDecoder 47MB |
 | グリフ 3,912 件と引き当て表 | `training/data/glyphs/` | 26MB。Material Symbols（Apache-2.0）|
 

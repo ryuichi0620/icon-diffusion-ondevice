@@ -32,6 +32,11 @@ training/outputs/**
 *.mlpackage
 *.mlmodelc
 
+# ただし**最新モデルの重みだけは追跡する**（12.8MB）。学習し直さずに
+# 生成・焼き込み・変換を再現できるようにしておく。古い版は残さない
+!training/outputs/icon-lora/
+!training/outputs/icon-lora/pytorch_lora_weights.safetensors
+
 # トークナイザ資産は 05_export_coreai.py が取得する（サイズが大きい）
 ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources/vocab.json
 ios/IconDiffusionKit/Sources/IconDiffusionKit/Resources/merges.txt
