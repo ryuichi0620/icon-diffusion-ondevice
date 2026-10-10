@@ -146,7 +146,10 @@ venv を分ける理由は [training/requirements.txt](training/requirements.txt
 | 学習データ 746 枚 | `training/data/raw/` | 373 被写体 × 2 枚。出所は `training/data/SOURCE.md` |
 | 焼き込み済みパイプライン | `training/outputs/fused/` | Stage 4 の出力。LoRA から作り直せる |
 | Core AI モデル 4 つ | `training/outputs/coreai/*.aimodel` | UNetControlled 821MB / ControlNet 345MB / TextEncoder 235MB / VAEDecoder 47MB |
-| グリフ 3,912 件と引き当て表 | `training/data/glyphs/` | 26MB。Material Symbols（Apache-2.0）|
+| グリフ 3,912 件と引き当て表 | `training/data/glyphs/` | 29MB。Material Symbols（Apache-2.0）|
+
+**焼き込み済みパイプラインと Core AI モデルは手元にも残していない。** 端末に載せるときは
+リポジトリの LoRA から Stage 4 → 5 を実行して作り直す。学習データとグリフは手元にある。
 
 ---
 
